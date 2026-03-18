@@ -9,6 +9,14 @@ Requirements are loaded from ReportingFrameworks_v1.xlsx (in the project repo).
 """
 
 import streamlit as st
+
+# Force light theme without needing .streamlit/config.toml
+st._config.set_option("theme.base", "light")
+st._config.set_option("theme.primaryColor", "#ff4b4b")
+st._config.set_option("theme.backgroundColor", "#ffffff")
+st._config.set_option("theme.secondaryBackgroundColor", "#f5f5f5")
+st._config.set_option("theme.textColor", "#1a1a1a")
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -26,104 +34,36 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS — force light theme without breaking tabs, Plotly, or alert boxes
 st.markdown("""
 <style>
+    /* ===== Global background ===== */
     .stApp {
         background-color: #ffffff;
+        color: #1a1a1a;
     }
     .main .block-container {
         padding-top: 2rem;
+        color: #1a1a1a;
     }
+
+    /* ===== Typography — scoped to avoid Plotly / tab leaks ===== */
     h1, h2, h3, h4 {
         color: #1a1a1a !important;
     }
-    p, span, label, .stMarkdown, .stText {
+    .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
+    .stText, .stCaption, .stSubheader {
         color: #1a1a1a !important;
     }
-    .stCheckbox label span {
+
+    /* ===== Labels (checkbox, select, input, file uploader) ===== */
+    .stCheckbox label, .stCheckbox label span,
+    .stSelectbox label, .stTextInput label, .stTextArea label,
+    .stFileUploader label, .stNumberInput label {
         color: #1a1a1a !important;
     }
-    .stSelectbox label, .stTextInput label, .stTextArea label, .stFileUploader label {
-        color: #1a1a1a !important;
-    }
-    /* Force light button styling */
-    .stButton > button {
-        background-color: #f0f0f0 !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
-    }
-    .stButton > button:hover {
-        background-color: #e0e0e0 !important;
-        border-color: #b0b0b0 !important;
-    }
-    .stButton > button[kind="primary"] {
-        background-color: #ff4b4b !important;
-        color: #ffffff !important;
-        border: none !important;
-    }
-    /* File uploader fix */
-    .stFileUploader section {
-        background-color: #f5f5f5 !important;
-        border-color: #d0d0d0 !important;
-    }
-    .stFileUploader section span, .stFileUploader section small {
-        color: #555555 !important;
-    }
-    .stFileUploader section button {
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
-    }
-    /* Select boxes, inputs, textareas — force light backgrounds and dark text */
-    [data-baseweb="select"], [data-baseweb="input"], [data-baseweb="textarea"] {
-        background-color: #ffffff !important;
-    }
-    [data-baseweb="select"] *, [data-baseweb="input"] *, [data-baseweb="textarea"] * {
-        color: #1a1a1a !important;
-    }
-    /* Text inputs (API key, etc.) */
-    .stTextInput input, .stNumberInput input, .stTextArea textarea {
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
-    }
-    /* Password input container */
-    .stTextInput > div > div {
-        background-color: #ffffff !important;
-    }
-    /* Number input steppers */
-    .stNumberInput > div > div {
-        background-color: #ffffff !important;
-    }
-    .stNumberInput button {
-        background-color: #f0f0f0 !important;
-        color: #1a1a1a !important;
-        border-color: #d0d0d0 !important;
-    }
-    /* File uploader — fix uploaded filename text */
-    .stFileUploader div, .stFileUploader small, .stFileUploader span,
-    .uploadedFileName, [data-testid="stFileUploaderFileName"] {
-        color: #1a1a1a !important;
-    }
-    .stFileUploader [data-testid="stFileUploaderDropzone"] {
-        background-color: #f5f5f5 !important;
-        border-color: #d0d0d0 !important;
-    }
-    .stFileUploader [data-testid="stFileUploaderDropzone"] * {
-        color: #555555 !important;
-    }
-    /* Expander headers (Results section) */
-    .streamlit-expanderHeader, [data-testid="stExpander"] summary,
-    [data-testid="stExpander"] summary span {
-        color: #1a1a1a !important;
-        background-color: #ffffff !important;
-    }
-    [data-testid="stExpander"] {
-        background-color: #ffffff !important;
-        border-color: #e0e0e0 !important;
-    }
-    /* Tabs */
+
+    /* ===== Tabs ===== */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
@@ -133,18 +73,113 @@ st.markdown("""
         padding: 10px 20px;
         color: #555555 !important;
     }
-    .stTabs [aria-selected="true"] {
+    /* Selected tab — higher specificity so it wins */
+    .stTabs [data-baseweb="tab"][aria-selected="true"],
+    .stTabs [data-baseweb="tab"][aria-selected="true"] * {
         background-color: #1a1a1a !important;
-        color: white !important;
+        color: #ffffff !important;
     }
-    /* Sidebar and general containers */
-    [data-testid="stSidebar"], [data-testid="stSidebar"] * {
-        color: #1a1a1a;
+
+    /* ===== Buttons ===== */
+    .stButton > button {
+        background-color: #f0f0f0 !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
     }
-    /* Info, success, warning, error boxes */
-    .stAlert p, .stAlert span {
+    .stButton > button:hover {
+        background-color: #e0e0e0 !important;
+        border-color: #b0b0b0 !important;
+    }
+    .stButton > button[kind="primary"],
+    .stButton > button[data-testid="stBaseButton-primary"] {
+        background-color: #ff4b4b !important;
+        color: #ffffff !important;
+        border: none !important;
+    }
+
+    /* ===== Inputs (text, password, number, textarea) ===== */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
+    }
+    .stTextInput > div > div, .stNumberInput > div > div {
+        background-color: #ffffff !important;
+    }
+    .stNumberInput button {
+        background-color: #f0f0f0 !important;
+        color: #1a1a1a !important;
+        border-color: #d0d0d0 !important;
+    }
+
+    /* ===== Select boxes (dropdowns) ===== */
+    [data-baseweb="select"] {
+        background-color: #ffffff !important;
+    }
+    [data-baseweb="select"] > div {
+        background-color: #ffffff !important;
+        border-color: #d0d0d0 !important;
+    }
+    [data-baseweb="select"] span, [data-baseweb="select"] div {
+        color: #1a1a1a !important;
+    }
+    /* Dropdown menu */
+    [data-baseweb="popover"], [data-baseweb="menu"] {
+        background-color: #ffffff !important;
+    }
+    [data-baseweb="popover"] li, [data-baseweb="menu"] li {
+        color: #1a1a1a !important;
+    }
+
+    /* ===== File uploader ===== */
+    .stFileUploader section {
+        background-color: #f5f5f5 !important;
+        border-color: #d0d0d0 !important;
+    }
+    .stFileUploader section span, .stFileUploader section small,
+    .stFileUploader section div {
+        color: #555555 !important;
+    }
+    .stFileUploader section button {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
+    }
+    [data-testid="stFileUploaderDropzone"] {
+        background-color: #f5f5f5 !important;
+        border-color: #d0d0d0 !important;
+    }
+    [data-testid="stFileUploaderDropzone"] * {
+        color: #555555 !important;
+    }
+    /* Uploaded file name */
+    [data-testid="stFileUploaderFile"] span,
+    [data-testid="stFileUploaderFile"] div {
+        color: #1a1a1a !important;
+    }
+
+    /* ===== Expanders (Results) ===== */
+    [data-testid="stExpander"] {
+        background-color: #ffffff !important;
+        border-color: #e0e0e0 !important;
+    }
+    [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] summary span,
+    [data-testid="stExpander"] summary p {
+        color: #1a1a1a !important;
+    }
+
+    /* ===== Alert boxes — inherit their own colours ===== */
+    .stAlert, .stAlert p, .stAlert span {
         color: inherit !important;
     }
+
+    /* ===== Plotly — do NOT override; let it manage its own text ===== */
+    .js-plotly-plot, .js-plotly-plot * {
+        /* no color override */
+    }
+
+    /* ===== Badge classes ===== */
     .framework-card {
         background-color: #f5f5f5;
         border-radius: 8px;
@@ -152,15 +187,15 @@ st.markdown("""
         margin: 0.5rem 0;
     }
     .badge-covers {
-        background-color: #dcfce7; color: #166534;
+        background-color: #dcfce7; color: #166534 !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
     .badge-partly {
-        background-color: #fef3c7; color: #92400e;
+        background-color: #fef3c7; color: #92400e !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
     .badge-doesnt {
-        background-color: #fee2e2; color: #991b1b;
+        background-color: #fee2e2; color: #991b1b !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
 </style>
@@ -880,6 +915,12 @@ def main():
                         bgcolor="#ffffff"
                     ),
                     paper_bgcolor="#ffffff",
+                    plot_bgcolor="#ffffff",
+                    font=dict(color="#1a1a1a"),
+                    coloraxis_colorbar=dict(
+                        tickfont=dict(color="#1a1a1a"),
+                        titlefont=dict(color="#1a1a1a"),
+                    ),
                     margin=dict(l=0, r=0, t=0, b=0),
                     height=500
                 )
