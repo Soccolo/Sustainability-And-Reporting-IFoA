@@ -75,25 +75,75 @@ st.markdown("""
         color: #1a1a1a !important;
         border: 1px solid #d0d0d0 !important;
     }
-    /* Select boxes and inputs */
+    /* Select boxes, inputs, textareas — force light backgrounds and dark text */
     [data-baseweb="select"], [data-baseweb="input"], [data-baseweb="textarea"] {
         background-color: #ffffff !important;
     }
-    [data-baseweb="select"] * , [data-baseweb="input"] * {
+    [data-baseweb="select"] *, [data-baseweb="input"] *, [data-baseweb="textarea"] * {
         color: #1a1a1a !important;
     }
+    /* Text inputs (API key, etc.) */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
+    }
+    /* Password input container */
+    .stTextInput > div > div {
+        background-color: #ffffff !important;
+    }
+    /* Number input steppers */
+    .stNumberInput > div > div {
+        background-color: #ffffff !important;
+    }
+    .stNumberInput button {
+        background-color: #f0f0f0 !important;
+        color: #1a1a1a !important;
+        border-color: #d0d0d0 !important;
+    }
+    /* File uploader — fix uploaded filename text */
+    .stFileUploader div, .stFileUploader small, .stFileUploader span,
+    .uploadedFileName, [data-testid="stFileUploaderFileName"] {
+        color: #1a1a1a !important;
+    }
+    .stFileUploader [data-testid="stFileUploaderDropzone"] {
+        background-color: #f5f5f5 !important;
+        border-color: #d0d0d0 !important;
+    }
+    .stFileUploader [data-testid="stFileUploaderDropzone"] * {
+        color: #555555 !important;
+    }
+    /* Expander headers (Results section) */
+    .streamlit-expanderHeader, [data-testid="stExpander"] summary,
+    [data-testid="stExpander"] summary span {
+        color: #1a1a1a !important;
+        background-color: #ffffff !important;
+    }
+    [data-testid="stExpander"] {
+        background-color: #ffffff !important;
+        border-color: #e0e0e0 !important;
+    }
+    /* Tabs */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #f0f0f0;
+        background-color: #f0f0f0 !important;
         border-radius: 8px;
         padding: 10px 20px;
-        color: #555555;
+        color: #555555 !important;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #1a1a1a;
-        color: white;
+        background-color: #1a1a1a !important;
+        color: white !important;
+    }
+    /* Sidebar and general containers */
+    [data-testid="stSidebar"], [data-testid="stSidebar"] * {
+        color: #1a1a1a;
+    }
+    /* Info, success, warning, error boxes */
+    .stAlert p, .stAlert span {
+        color: inherit !important;
     }
     .framework-card {
         background-color: #f5f5f5;
@@ -949,6 +999,32 @@ def main():
                 help="Upload your ESG report or transition plan PDF"
             )
 
+            # Page range selection (only shown when a PDF is uploaded)
+            page_start = 1
+            page_end = None
+            if uploaded_file:
+                # Peek at total page count without consuming the file
+                import pymupdf
+                pdf_bytes = uploaded_file.read()
+                uploaded_file.seek(0)  # reset so it can be read again later
+                with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
+                    total_pages = len(doc)
+
+                st.markdown(f"**PDF has {total_pages} pages.** Select the range to analyse:")
+                pr_col1, pr_col2 = st.columns(2)
+                with pr_col1:
+                    page_start = st.number_input(
+                        "From page", min_value=1, max_value=total_pages,
+                        value=1, step=1, key="page_start"
+                    )
+                with pr_col2:
+                    page_end = st.number_input(
+                        "To page", min_value=1, max_value=total_pages,
+                        value=total_pages, step=1, key="page_end"
+                    )
+                if page_start > page_end:
+                    st.warning("'From page' must be ≤ 'To page'.")
+
             # Or paste text
             st.markdown("**Or paste text:**")
             pasted_text = st.text_area(
@@ -970,10 +1046,23 @@ def main():
                 else:
                     # Extract text
                     if uploaded_file:
+                        # Validate page range
+                        if page_end is not None and page_start > page_end:
+                            st.error("'From page' must be ≤ 'To page'.")
+                            st.stop()
+
                         with st.spinner("Extracting text from PDF..."):
                             try:
                                 text_list = extract_text_from_pdf(uploaded_file)
-                                st.success(f"Extracted {len(text_list)} pages")
+                                total = len(text_list)
+                                # Apply page range (convert 1-indexed to 0-indexed)
+                                start_idx = max(0, page_start - 1)
+                                end_idx = page_end if page_end is not None else total
+                                text_list = text_list[start_idx:end_idx]
+                                st.success(
+                                    f"Analysing pages {page_start}–{end_idx} "
+                                    f"({len(text_list)} of {total} pages)"
+                                )
                             except Exception as e:
                                 st.error(f"Failed to extract PDF: {e}")
                                 st.stop()
