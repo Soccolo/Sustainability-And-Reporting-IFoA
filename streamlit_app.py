@@ -1223,28 +1223,70 @@ def main():
                     size="size",
                     color="frameworks" if selected_framework == "ALL" else None,
                     color_continuous_scale="Viridis" if selected_framework == "ALL" else None,
-                    projection="natural earth"
+                    projection="orthographic"
                 )
 
                 if selected_framework != "ALL":
                     fig.update_traces(marker=dict(color=FRAMEWORK_COLORS.get(selected_framework, "#888")))
 
+                # Build rotation animation frames (full 360° spin)
+                n_frames = 36
+                frames = []
+                for i in range(n_frames):
+                    lon_rot = -20 + (360 / n_frames) * i
+                    frames.append(go.Frame(
+                        layout=dict(geo=dict(projection_rotation=dict(lon=lon_rot, lat=15))),
+                        name=str(i)
+                    ))
+                fig.frames = frames
+
                 fig.update_layout(
                     geo=dict(
                         showland=True,
-                        landcolor="#e8e8e8",
+                        landcolor="#d4e8d0",
                         showocean=True,
-                        oceancolor="#f8f8f8",
+                        oceancolor="#daeaf6",
                         showcoastlines=True,
-                        coastlinecolor="#cccccc",
+                        coastlinecolor="#aaaaaa",
+                        showcountries=True,
+                        countrycolor="#cccccc",
                         showframe=False,
-                        bgcolor="#ffffff"
+                        bgcolor="#ffffff",
+                        projection_rotation=dict(lon=-20, lat=15),
                     ),
                     paper_bgcolor="#ffffff",
                     plot_bgcolor="#ffffff",
                     font=dict(color="#1a1a1a"),
                     margin=dict(l=0, r=0, t=0, b=0),
-                    height=500
+                    height=560,
+                    # Play/pause button and slider for the spin
+                    updatemenus=[dict(
+                        type="buttons",
+                        showactive=False,
+                        x=0.02, y=0.02,
+                        xanchor="left", yanchor="bottom",
+                        buttons=[
+                            dict(
+                                label="▶ Spin",
+                                method="animate",
+                                args=[None, dict(
+                                    frame=dict(duration=120, redraw=True),
+                                    fromcurrent=True,
+                                    transition=dict(duration=80),
+                                    mode="immediate",
+                                )],
+                            ),
+                            dict(
+                                label="⏸ Stop",
+                                method="animate",
+                                args=[[None], dict(
+                                    frame=dict(duration=0, redraw=False),
+                                    mode="immediate",
+                                    transition=dict(duration=0),
+                                )],
+                            ),
+                        ],
+                    )],
                 )
 
                 st.plotly_chart(fig, use_container_width=True)
