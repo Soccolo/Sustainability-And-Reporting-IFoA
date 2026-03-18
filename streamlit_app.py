@@ -2,8 +2,10 @@
 Sustainability Framework Analyzer - Streamlit App
 Deploy to Streamlit Cloud for free public access.
 
-Uses spacy-universal-sentence-encoder with nlp.similarity() - 
-the exact same method from the Jupyter notebook.
+Uses Claude Haiku 4.5 API for intelligent report analysis
+against sustainability framework requirements.
+
+Requirements are loaded from ReportingFrameworks_v1.xlsx (in the project repo).
 """
 
 import streamlit as st
@@ -11,12 +13,15 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import json
+import anthropic
 from io import BytesIO
+from collections import defaultdict
 
 # Page config
 st.set_page_config(
     page_title="Sustainability Framework Analyzer",
-    page_icon="🌍",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -25,37 +30,45 @@ st.set_page_config(
 st.markdown("""
 <style>
     .stApp {
-        background-color: #0f172a;
+        background-color: #ffffff;
     }
     .main .block-container {
         padding-top: 2rem;
     }
     h1, h2, h3 {
-        color: #f1f5f9 !important;
+        color: #1a1a1a !important;
     }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #1e293b;
+        background-color: #f0f0f0;
         border-radius: 8px;
         padding: 10px 20px;
-        color: #94a3b8;
+        color: #555555;
     }
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(to right, #10b981, #06b6d4);
+        background-color: #1a1a1a;
         color: white;
     }
     .framework-card {
-        background-color: #1e293b;
+        background-color: #f5f5f5;
         border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
     }
-    .score-high { color: #10b981; }
-    .score-medium { color: #06b6d4; }
-    .score-low { color: #f59e0b; }
-    .score-verylow { color: #ef4444; }
+    .badge-covers {
+        background-color: #dcfce7; color: #166534;
+        padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
+    }
+    .badge-partly {
+        background-color: #fef3c7; color: #92400e;
+        padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
+    }
+    .badge-doesnt {
+        background-color: #fee2e2; color: #991b1b;
+        padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -67,39 +80,48 @@ FRAMEWORK_COLORS = {
     "TCFD": "#3b82f6",
     "TNFD": "#10b981",
     "PRA": "#f59e0b",
-    "IFRS": "#ef4444",
+    "IFRS S1": "#ef4444",
+    "IFRS S2": "#dc2626",
     "TPT": "#8b5cf6",
     "BMA": "#ec4899",
     "MAS": "#14b8a6",
-    "ESRS": "#f97316",
+    "ESRS E1": "#f97316",
+    "ESRS E4": "#fb923c",
     "OSFI": "#06b6d4",
-    "SBTi": "#a855f7"
+    "SBTi": "#a855f7",
+    "PSI": "#64748b"
 }
 
 FRAMEWORK_FULL_NAMES = {
     "TCFD": "Task Force on Climate-related Financial Disclosures",
     "TNFD": "Taskforce on Nature-related Financial Disclosures",
     "PRA": "Prudential Regulation Authority",
-    "IFRS": "International Financial Reporting Standards",
+    "IFRS S1": "IFRS S1 – General Requirements for Disclosure of Sustainability-related Financial Information",
+    "IFRS S2": "IFRS S2 – Climate-related Disclosures",
     "TPT": "Transition Plan Taskforce",
     "BMA": "Bermuda Monetary Authority",
     "MAS": "Monetary Authority of Singapore",
-    "ESRS": "European Sustainability Reporting Standards",
+    "ESRS E1": "European Sustainability Reporting Standards – Climate Change (E1)",
+    "ESRS E4": "European Sustainability Reporting Standards – Biodiversity and Ecosystems (E4)",
     "OSFI": "Office of the Superintendent of Financial Institutions",
-    "SBTi": "Science Based Targets initiative"
+    "SBTi": "Science Based Targets initiative",
+    "PSI": "Principles for Sustainable Insurance"
 }
 
 ADOPTION_DICT = {
     "TCFD": ["Canada", "France", "Germany", "Italy", "Japan", "United Kingdom", "USA", "New Zealand", "Switzerland", "Singapore", "Brazil", "China", "South Africa"],
     "TNFD": ["Brazil", "China", "Colombia", "Costa Rica", "Egypt", "India", "Indonesia", "Kenya", "Malaysia", "Mexico", "Morocco", "Nigeria", "Peru", "Philippines", "South Africa"],
     "PRA": ["United Kingdom"],
-    "IFRS": ["Turkey", "Bangladesh", "Brazil", "Australia", "Japan", "United Kingdom", "Canada", "Singapore", "New Zealand", "Nigeria", "South Africa", "Malaysia", "China"],
+    "IFRS S1": ["Turkey", "Bangladesh", "Brazil", "Australia", "Japan", "United Kingdom", "Canada", "Singapore", "New Zealand", "Nigeria", "South Africa", "Malaysia", "China"],
+    "IFRS S2": ["Turkey", "Bangladesh", "Brazil", "Australia", "Japan", "United Kingdom", "Canada", "Singapore", "New Zealand", "Nigeria", "South Africa", "Malaysia", "China"],
     "TPT": ["United Kingdom"],
     "BMA": ["Bermuda"],
     "MAS": ["Singapore"],
-    "ESRS": ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"],
+    "ESRS E1": ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"],
+    "ESRS E4": ["Austria", "Belgium", "Bulgaria", "Croatia", "Cyprus", "Czech Republic", "Denmark", "Estonia", "Finland", "France", "Germany", "Greece", "Hungary", "Ireland", "Italy", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "Poland", "Portugal", "Romania", "Slovakia", "Slovenia", "Spain", "Sweden"],
     "OSFI": ["Canada"],
-    "SBTi": ["Japan", "United Kingdom", "USA", "China", "Germany", "France", "India", "Italy", "Canada", "South Korea", "Mexico", "Brazil", "Australia", "South Africa", "Turkey", "Romania", "Malta"]
+    "SBTi": ["Japan", "United Kingdom", "USA", "China", "Germany", "France", "India", "Italy", "Canada", "South Korea", "Mexico", "Brazil", "Australia", "South Africa", "Turkey", "Romania", "Malta"],
+    "PSI": ["Japan", "United Kingdom", "USA", "Germany", "France", "Brazil", "Australia", "South Africa", "China", "India", "Singapore", "Canada", "Switzerland", "Netherlands", "Sweden"]
 }
 
 COUNTRY_COORDS = {
@@ -160,6 +182,13 @@ COUNTRY_COORDS = {
 }
 
 # Similarity data from the notebook
+# NOTE: Similarity keys use the original framework names (TCFD, TNFD, PRA, IFRS, TPT, BMA, MAS, ESRS, OSFI, SBTi).
+# For split frameworks (IFRS S1/S2, ESRS E1/E4), similarity lookups fall back to the parent name.
+SIMILARITY_PARENT_MAP = {
+    "IFRS S1": "IFRS", "IFRS S2": "IFRS",
+    "ESRS E1": "ESRS", "ESRS E4": "ESRS",
+}
+
 SIMILARITY_DATA = {
     'all_metrics': """Framework 1,Framework 2,Similarity
 TCFD,TNFD,0.5839409060203112
@@ -309,267 +338,288 @@ ESRS,SBTi,0.12503772418815917
 OSFI,SBTi,0.11751481243926618"""
 }
 
-FRAMEWORK_REQUIREMENTS = {
-    "TCFD": {
-        "Governance": [
-            "Describe the board's oversight of climate-related risks and opportunities",
-            "Describe management's role in assessing and managing climate-related risks and opportunities"
-        ],
-        "Strategy": [
-            "Describe the climate-related risks and opportunities the organization has identified over the short, medium, and long term",
-            "Describe the impact of climate-related risks and opportunities on the organization's businesses, strategy, and financial planning",
-            "Describe the resilience of the organization's strategy, taking into consideration different climate-related scenarios"
-        ],
-        "RiskManagement": [
-            "Describe the organization's processes for identifying and assessing climate-related risks",
-            "Describe the organization's processes for managing climate-related risks",
-            "Describe how processes for identifying, assessing, and managing climate-related risks are integrated into the organization's overall risk management"
-        ],
-        "MetricsandTargets": [
-            "Disclose the metrics used by the organization to assess climate-related risks and opportunities",
-            "Disclose Scope 1, Scope 2, and, if appropriate, Scope 3 greenhouse gas (GHG) emissions",
-            "Describe the targets used by the organization to manage climate-related risks and opportunities and performance against targets"
-        ]
-    },
-    "TNFD": {
-        "Governance": [
-            "Describe the board's oversight of nature-related dependencies, impacts, risks and opportunities",
-            "Describe management's role in assessing and managing nature-related dependencies, impacts, risks and opportunities"
-        ],
-        "Strategy": [
-            "Describe the nature-related dependencies, impacts, risks and opportunities the organisation has identified",
-            "Describe the effect nature-related dependencies, impacts, risks and opportunities have had on the organisation's business model, value chain, strategy, and financial planning",
-            "Describe the resilience of the organisation's strategy to nature-related risks and opportunities"
-        ],
-        "RiskManagement": [
-            "Describe the organisation's processes for identifying, assessing and prioritising nature-related dependencies, impacts, risks and opportunities",
-            "Describe the organisation's processes for managing nature-related dependencies, impacts, risks and opportunities"
-        ],
-        "MetricsandTargets": [
-            "Disclose the metrics used by the organisation to assess and manage material nature-related risks and opportunities",
-            "Describe the targets and goals used by the organisation to manage nature-related dependencies, impacts, risks and opportunities"
-        ]
-    },
-    "ESRS": {
-        "Governance": [
-            "Disclose information about the governance structure and its composition including committees responsible for decision-making on sustainability matters",
-            "Disclose information about the role of the administrative, management and supervisory bodies with regard to sustainability matters"
-        ],
-        "Strategy": [
-            "Disclose the undertaking's strategy and business model in relation to sustainability matters",
-            "Describe how the undertaking's strategy and business model interact with its material impacts, risks and opportunities"
-        ],
-        "RiskManagement": [
-            "Describe the processes by which sustainability-related risks are identified, assessed and managed",
-            "Describe how sustainability-related risks are integrated into the undertaking's overall risk management"
-        ],
-        "MetricsandTargets": [
-            "Disclose the metrics used to assess performance in relation to each material sustainability matter",
-            "Disclose Scope 1, Scope 2 and Scope 3 greenhouse gas emissions",
-            "Describe the targets the undertaking has adopted and the progress made towards achieving those targets"
-        ],
-        "Disclosure": [
-            "Prepare sustainability statements in accordance with ESRS",
-            "Disclose policies adopted to manage material sustainability matters"
-        ]
-    },
-    "IFRS": {
-        "Governance": [
-            "Disclose information about the governance body or bodies responsible for oversight of sustainability-related risks and opportunities"
-        ],
-        "Strategy": [
-            "Disclose sustainability-related risks and opportunities that could reasonably be expected to affect the entity's prospects",
-            "Disclose how sustainability-related risks and opportunities affect the entity's strategy and decision-making"
-        ],
-        "RiskManagement": [
-            "Describe the processes the entity uses to identify, assess and manage sustainability-related risks"
-        ],
-        "MetricsandTargets": [
-            "Disclose information relevant to the cross-industry metric categories",
-            "Disclose targets set by the entity to mitigate or adapt to sustainability-related risks"
-        ]
-    },
-    "PRA": {
-        "Strategy": [
-            "Develop a strategic approach to managing climate-related financial risks",
-            "Consider how climate-related scenarios could affect the firm's business model and strategy"
-        ],
-        "RiskManagement": [
-            "Embed climate-related financial risks within the firm's overall risk management framework",
-            "Develop appropriate key risk indicators and limits for climate-related financial risks"
-        ],
-        "ScenarioAnalysis": [
-            "Develop capabilities and tools to assess climate-related risks using scenario analysis",
-            "Consider a range of scenarios, including those consistent with the Paris Agreement"
-        ],
-        "Disclosure": [
-            "Disclose how climate-related financial risks are governed and managed",
-            "Disclose metrics and targets used to assess and manage climate-related financial risks"
-        ]
-    },
-    "TPT": {
-        "Strategy": [
-            "Articulate the entity's climate transition plan and how it aligns with achieving net zero",
-            "Describe the entity's strategic ambition and priorities for addressing climate change"
-        ],
-        "MetricsandTargets": [
-            "Set and disclose targets for reducing greenhouse gas emissions",
-            "Disclose metrics to measure progress against the transition plan"
-        ],
-        "Governance": [
-            "Describe board-level oversight of climate transition planning and implementation"
-        ]
-    },
-    "BMA": {
-        "MaterialityAssessment": [
-            "Conduct an assessment of the materiality of climate-related risks",
-            "Consider both physical and transition risks in the materiality assessment"
-        ],
-        "Governance": [
-            "Establish appropriate governance structures for managing climate-related risks"
-        ],
-        "RiskManagement": [
-            "Integrate climate-related risks into the insurer's risk management framework",
-            "Develop stress testing and scenario analysis capabilities for climate risks"
-        ],
-        "ORSA": [
-            "Include climate-related risks in the Own Risk and Solvency Assessment"
-        ]
-    },
-    "MAS": {
-        "Governance": [
-            "Establish board and senior management oversight of environmental risk management"
-        ],
-        "RiskManagement": [
-            "Integrate environmental risk into the institution's risk management framework",
-            "Develop tools and metrics to assess and monitor environmental risk"
-        ],
-        "Underwriting": [
-            "Consider environmental risk factors in underwriting and investment decisions"
-        ],
-        "Disclosure": [
-            "Disclose environmental risk exposures and management approach"
-        ]
-    },
-    "OSFI": {
-        "Governance": [
-            "Establish governance structures for oversight of climate-related risks"
-        ],
-        "RiskManagement": [
-            "Integrate climate-related risks into the institution's risk management framework"
-        ],
-        "ScenarioAnalysis": [
-            "Conduct climate scenario analysis to assess potential impacts"
-        ],
-        "Disclosure": [
-            "Disclose climate-related risks in accordance with regulatory requirements"
-        ]
-    },
-    "SBTi": {
-        "MetricsandTargets": [
-            "Set science-based targets aligned with 1.5°C or well-below 2°C pathways",
-            "Include Scope 1, 2 and relevant Scope 3 emissions in target boundary",
-            "Report progress against targets annually"
-        ],
-        "Governance": [
-            "Obtain board-level approval for science-based targets"
-        ],
-        "Disclosure": [
-            "Publicly announce commitment to set science-based targets"
-        ]
-    }
+
+# ============================================
+# LOAD FRAMEWORK REQUIREMENTS FROM EXCEL
+# ============================================
+
+@st.cache_data
+def load_framework_requirements():
+    """
+    Load framework requirements from ReportingFrameworks_v1.xlsx.
+    Returns a dict: { framework: { topic: [recommendation_1, ...] } }
+    Recommendations are deduplicated per framework+topic.
+    """
+    import os
+
+    # Try multiple paths: same directory as script, then common locations
+    possible_paths = [
+        os.path.join(os.path.dirname(__file__), "ReportingFrameworks_v1.xlsx"),
+        "ReportingFrameworks_v1.xlsx",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "ReportingFrameworks_v1.xlsx"),
+    ]
+
+    df = None
+    for path in possible_paths:
+        if os.path.exists(path):
+            df = pd.read_excel(path, engine="openpyxl")
+            break
+
+    if df is None:
+        st.error(
+            "Could not find ReportingFrameworks_v1.xlsx. "
+            "Please ensure the file is in the same directory as this script."
+        )
+        return {}
+
+    requirements = defaultdict(lambda: defaultdict(list))
+
+    for _, row in df.iterrows():
+        framework = row.get("Framework")
+        topic = row.get("Topic")
+        recommendation = row.get("Recommendation")
+
+        if pd.isna(framework) or pd.isna(topic) or pd.isna(recommendation):
+            continue
+
+        framework = str(framework).strip()
+        topic = str(topic).strip()
+        recommendation = str(recommendation).strip()
+
+        # Deduplicate
+        if recommendation not in requirements[framework][topic]:
+            requirements[framework][topic].append(recommendation)
+
+    # Convert defaultdicts to regular dicts for caching
+    return {fw: dict(topics) for fw, topics in requirements.items()}
+
+
+# ============================================
+# CLASSIFICATION HELPERS
+# ============================================
+
+CLASSIFICATION_COVERS = "Covers the framework"
+CLASSIFICATION_PARTLY = "Partly covers the framework"
+CLASSIFICATION_DOESNT = "Doesn't cover the framework"
+
+ALL_CLASSIFICATIONS = [CLASSIFICATION_COVERS, CLASSIFICATION_PARTLY, CLASSIFICATION_DOESNT]
+
+CLASSIFICATION_COLORS = {
+    CLASSIFICATION_COVERS: "#16a34a",
+    CLASSIFICATION_PARTLY: "#d97706",
+    CLASSIFICATION_DOESNT: "#dc2626",
 }
+
+CLASSIFICATION_BADGES = {
+    CLASSIFICATION_COVERS: "badge-covers",
+    CLASSIFICATION_PARTLY: "badge-partly",
+    CLASSIFICATION_DOESNT: "badge-doesnt",
+}
+
+
+def classification_to_score(classification):
+    """Map classification to a numeric value for summary statistics."""
+    if classification == CLASSIFICATION_COVERS:
+        return 1.0
+    elif classification == CLASSIFICATION_PARTLY:
+        return 0.5
+    else:
+        return 0.0
 
 
 # ============================================
 # HELPER FUNCTIONS
 # ============================================
 
-@st.cache_resource
-def load_nlp_model():
-    """Load the spacy universal sentence encoder model (cached)"""
-    import spacy_universal_sentence_encoder
-    return spacy_universal_sentence_encoder.load_model('en_use_lg')
-
-
 def extract_text_from_pdf(pdf_file):
     """Extract text from PDF page by page using pymupdf"""
     import pymupdf
-    
+
     pdf_bytes = pdf_file.read()
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-    
+
     text_list = []
     for page_num, page in enumerate(doc):
         text = page.get_text()
         text_list.append(text.replace('\n', ' '))
-    
+
     doc.close()
     return text_list
 
 
-def document_similarity(text_list, selected_frameworks, progress_bar=None):
+def claude_analyze_report(report_text, selected_frameworks, api_key, framework_requirements, progress_bar=None):
     """
-    Calculate similarity using spacy nlp.similarity() - 
-    the exact same method from the Jupyter notebook.
+    Use Claude Haiku 4.5 to assess a report requirement-by-requirement.
+
+    For each framework requirement, Claude:
+    1. Searches the full report for all relevant passages
+    2. Classifies how well the requirement is addressed:
+       - "Covers the framework"
+       - "Partly covers the framework"
+       - "Doesn't cover the framework"
+    3. Provides a rationale referencing the specific text found
+
+    Cost optimisation:
+    - Uses claude-haiku-4-5-20251001 (cheapest model: $1/$5 per MTok)
+    - Prompt caching: report text in system message is cached across calls
+      (cache reads are 90% cheaper than fresh input)
+    - One API call per framework batches all its requirements together
     """
-    nlp = load_nlp_model()
-    
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # System message with report text - this gets cached across framework calls
+    system_message = [
+        {
+            "type": "text",
+            "text": (
+                "You are an expert sustainability and ESG analyst.\n\n"
+                "You will be given a set of regulatory framework requirements. For EACH requirement, "
+                "you must:\n"
+                "1. Search the ENTIRE report below for ALL passages that address that requirement. "
+                "The relevant content may be spread across multiple sections.\n"
+                "2. Extract short verbatim quotes from the report (max ~40 words each) that are "
+                "most relevant to the requirement.\n"
+                "3. Classify how well the requirement is addressed using EXACTLY one of these three labels:\n"
+                '   - "Covers the framework" — the report comprehensively addresses this requirement '
+                "with specific, concrete content and detail.\n"
+                '   - "Partly covers the framework" — the report addresses some aspects of this '
+                "requirement but is incomplete, vague, or lacks concrete detail.\n"
+                '   - "Doesn\'t cover the framework" — the report does not meaningfully address '
+                "this requirement.\n"
+                "4. Write a rationale (2-3 sentences) explaining the classification, referencing what the "
+                "report does or does not cover.\n\n"
+                "Be rigorous. 'Covers the framework' requires specific, concrete content — not just vague "
+                "mentions. If the report only partially addresses a requirement, classify it as "
+                "'Partly covers the framework'.\n\n"
+                "REPORT TEXT:\n"
+                f"{report_text}"
+            ),
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+
     results = []
-    
-    # Pre-compute document embeddings
-    doc_nlps = [nlp(text) for text in text_list]
-    
-    # Count total steps for progress
-    total_steps = sum(
-        len(topics) 
-        for fw in selected_frameworks 
-        if fw in FRAMEWORK_REQUIREMENTS
-        for topics in [FRAMEWORK_REQUIREMENTS[fw]]
-    )
-    current_step = 0
-    
-    for framework in selected_frameworks:
-        if framework not in FRAMEWORK_REQUIREMENTS:
+    total_steps = len(selected_frameworks)
+    input_tokens_total = 0
+    output_tokens_total = 0
+    cache_read_tokens_total = 0
+    cache_write_tokens_total = 0
+
+    for step, framework in enumerate(selected_frameworks):
+        if framework not in framework_requirements:
             continue
-            
-        topics = FRAMEWORK_REQUIREMENTS[framework]
-        
-        for topic, requirements in topics.items():
-            similarities = []
-            
-            for requirement in requirements:
-                # Create spacy doc for requirement (same as notebook)
-                curr_nlp = nlp(requirement)
-                
-                for doc_nlp in doc_nlps:
-                    # Use nlp.similarity() - the exact method from the notebook
-                    similarity = curr_nlp.similarity(doc_nlp)
-                    similarities.append(similarity)
-            
-            # Calculate mean similarity for this topic
-            avg_similarity = sum(similarities) / len(similarities) if similarities else 0
-            
-            results.append({
-                "framework": framework,
-                "topic": topic,
-                "score": float(avg_similarity),
-                "explanation": get_explanation(avg_similarity)
-            })
-            
-            current_step += 1
-            if progress_bar:
-                progress_bar.progress(current_step / total_steps)
-    
-    # Calculate framework-level averages
-    framework_averages = {}
+
+        topics = framework_requirements[framework]
+        fw_full_name = FRAMEWORK_FULL_NAMES.get(framework, framework)
+
+        # Build the requirements list for this framework
+        requirements_text = (
+            f"Assess the report against each requirement of the "
+            f"**{fw_full_name} ({framework})** framework.\n\n"
+            f"For each requirement below, find all relevant text in the report, "
+            f"classify it, and explain your reasoning.\n\n"
+        )
+
+        req_index = 1
+        for topic, reqs in topics.items():
+            for req in reqs:
+                requirements_text += f"{req_index}. [{topic}] {req}\n"
+                req_index += 1
+
+        requirements_text += (
+            "\n\nRespond ONLY with a JSON array. Each element must have exactly these keys:\n"
+            "{\n"
+            ' "topic": "<topic name from the square brackets>",\n'
+            ' "requirement": "<the requirement text>",\n'
+            ' "relevant_extracts": ["<short verbatim quote 1 from report>", "<quote 2>", ...],\n'
+            ' "classification": "<one of: Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",\n'
+            ' "rationale": "<2-3 sentence explanation referencing what the report covers or misses>"\n'
+            "}\n\n"
+            "If no relevant text exists for a requirement, set relevant_extracts to an empty array "
+            "and classification to \"Doesn't cover the framework\".\n"
+            "No markdown, no backticks, no preamble — just the raw JSON array."
+        )
+
+        try:
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=8192,
+                system=system_message,
+                messages=[{"role": "user", "content": requirements_text}]
+            )
+
+            # Track token usage
+            usage = response.usage
+            input_tokens_total += usage.input_tokens
+            output_tokens_total += usage.output_tokens
+            cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
+            cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
+
+            # Parse the JSON response
+            raw_text = response.content[0].text.strip()
+            # Clean up common formatting issues
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                raw_text = raw_text.strip()
+
+            scored_items = json.loads(raw_text)
+
+            for item in scored_items:
+                # Normalise the classification string
+                raw_class = item.get("classification", CLASSIFICATION_DOESNT).strip()
+                # Match to canonical labels (fuzzy)
+                if "covers" in raw_class.lower() and "partly" not in raw_class.lower() and "doesn" not in raw_class.lower():
+                    classification = CLASSIFICATION_COVERS
+                elif "partly" in raw_class.lower():
+                    classification = CLASSIFICATION_PARTLY
+                else:
+                    classification = CLASSIFICATION_DOESNT
+
+                results.append({
+                    "framework": framework,
+                    "topic": item["topic"],
+                    "requirement": item.get("requirement", ""),
+                    "relevant_extracts": item.get("relevant_extracts", []),
+                    "classification": classification,
+                    "rationale": item.get("rationale", "")
+                })
+
+        except json.JSONDecodeError as e:
+            st.warning(f"Could not parse response for {framework}. Raw response saved for debugging.")
+            st.code(raw_text[:500], language="json")
+        except anthropic.APIError as e:
+            st.error(f"API error for {framework}: {e}")
+
+        if progress_bar:
+            progress_bar.progress((step + 1) / total_steps)
+
+    # Calculate framework-level coverage summaries
+    framework_summaries = {}
     for framework in selected_frameworks:
-        framework_results = [r for r in results if r["framework"] == framework]
-        if framework_results:
-            avg = sum(r["score"] for r in framework_results) / len(framework_results)
-            framework_averages[framework] = avg
-    
-    return results, framework_averages
+        fw_results = [r for r in results if r["framework"] == framework]
+        if fw_results:
+            counts = {c: 0 for c in ALL_CLASSIFICATIONS}
+            for r in fw_results:
+                counts[r["classification"]] = counts.get(r["classification"], 0) + 1
+            total = len(fw_results)
+            avg_score = sum(classification_to_score(r["classification"]) for r in fw_results) / total
+            framework_summaries[framework] = {
+                "counts": counts,
+                "total": total,
+                "avg_score": avg_score,
+            }
+
+    # Token usage summary
+    token_usage = {
+        "input_tokens": input_tokens_total,
+        "output_tokens": output_tokens_total,
+        "cache_read_tokens": cache_read_tokens_total,
+        "cache_write_tokens": cache_write_tokens_total,
+    }
+
+    return results, framework_summaries, token_usage
 
 
 def get_explanation(score):
@@ -604,18 +654,22 @@ def parse_similarity_csv(csv_string):
 
 
 def get_similarity_for_framework(df, framework):
-    """Get similarity scores for a specific framework"""
-    mask = (df['Framework 1'] == framework) | (df['Framework 2'] == framework)
+    """Get similarity scores for a specific framework.
+    For split frameworks (e.g. IFRS S1), falls back to the parent name (IFRS) in similarity data.
+    """
+    lookup_name = SIMILARITY_PARENT_MAP.get(framework, framework)
+
+    mask = (df['Framework 1'] == lookup_name) | (df['Framework 2'] == lookup_name)
     filtered = df[mask].copy()
-    
+
     result = []
     for _, row in filtered.iterrows():
-        other = row['Framework 2'] if row['Framework 1'] == framework else row['Framework 1']
+        other = row['Framework 2'] if row['Framework 1'] == lookup_name else row['Framework 1']
         result.append({
             'framework': other,
             'similarity': row['Similarity']
         })
-    
+
     return sorted(result, key=lambda x: x['similarity'], reverse=True)
 
 
@@ -624,20 +678,23 @@ def get_similarity_for_framework(df, framework):
 # ============================================
 
 def main():
-    st.title("🌍 Sustainability Framework Analyzer")
+    st.title("Sustainability Framework Analyzer")
     st.markdown("Compare & analyze ESG reporting frameworks")
-    
-    tab1, tab2 = st.tabs(["🗺️ Framework Map", "📊 Report Analyzer"])
-    
+
+    # Load requirements from Excel once
+    framework_requirements = load_framework_requirements()
+
+    tab1, tab2 = st.tabs(["Framework Map", "Report Analyzer"])
+
     # ============================================
     # TAB 1: FRAMEWORK MAP
     # ============================================
     with tab1:
         st.header("Climate & Sustainability Framework Adoption")
         st.markdown("Interactive map showing global adoption of regulatory frameworks")
-        
+
         col1, col2 = st.columns([1, 3])
-        
+
         with col1:
             # Metric selector
             metric_type = st.selectbox(
@@ -645,14 +702,14 @@ def main():
                 options=["all_metrics", "governance", "strategy", "risk", "metrics", "disclosure"],
                 format_func=lambda x: x.replace("_", " ").title()
             )
-            
+
             # Framework selector
             framework_options = ["ALL"] + list(FRAMEWORK_COLORS.keys())
             selected_framework = st.selectbox(
                 "Select Framework",
                 options=framework_options
             )
-            
+
             # Legend
             st.markdown("### Framework Legend")
             for fw, color in FRAMEWORK_COLORS.items():
@@ -661,21 +718,20 @@ def main():
                     f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">'
                     f'<div style="width:16px;height:16px;background:{color};border-radius:4px;"></div>'
                     f'<span>{fw}</span>'
-                    f'<span style="color:#64748b;">({count} countries)</span>'
+                    f'<span style="color:#888888;">({count} countries)</span>'
                     f'</div>',
                     unsafe_allow_html=True
                 )
-        
+
         with col2:
             # Create map data
             map_data = []
-            
+
             if selected_framework == "ALL":
-                # Show all countries with framework counts
                 all_countries = set()
                 for countries in ADOPTION_DICT.values():
                     all_countries.update(countries)
-                
+
                 for country in all_countries:
                     if country in COUNTRY_COORDS:
                         frameworks = [fw for fw, countries in ADOPTION_DICT.items() if country in countries]
@@ -688,7 +744,6 @@ def main():
                             "size": 10 + len(frameworks) * 3
                         })
             else:
-                # Show countries for selected framework
                 countries = ADOPTION_DICT.get(selected_framework, [])
                 for country in countries:
                     if country in COUNTRY_COORDS:
@@ -700,10 +755,10 @@ def main():
                             "framework_list": selected_framework,
                             "size": 15
                         })
-            
+
             if map_data:
                 df_map = pd.DataFrame(map_data)
-                
+
                 fig = px.scatter_geo(
                     df_map,
                     lat="lat",
@@ -715,52 +770,52 @@ def main():
                     color_continuous_scale="Viridis" if selected_framework == "ALL" else None,
                     projection="natural earth"
                 )
-                
+
                 if selected_framework != "ALL":
-                    fig.update_traces(marker=dict(color=FRAMEWORK_COLORS[selected_framework]))
-                
+                    fig.update_traces(marker=dict(color=FRAMEWORK_COLORS.get(selected_framework, "#888")))
+
                 fig.update_layout(
                     geo=dict(
                         showland=True,
-                        landcolor="#1e293b",
+                        landcolor="#e8e8e8",
                         showocean=True,
-                        oceancolor="#0f172a",
+                        oceancolor="#f8f8f8",
                         showcoastlines=True,
-                        coastlinecolor="#334155",
+                        coastlinecolor="#cccccc",
                         showframe=False,
-                        bgcolor="#0f172a"
+                        bgcolor="#ffffff"
                     ),
-                    paper_bgcolor="#0f172a",
+                    paper_bgcolor="#ffffff",
                     margin=dict(l=0, r=0, t=0, b=0),
                     height=500
                 )
-                
+
                 st.plotly_chart(fig, use_container_width=True)
-            
+
             # Similarity table
             if selected_framework != "ALL":
                 st.markdown(f"### Framework Similarity: {selected_framework}")
                 st.markdown(f"*Metric: {metric_type.replace('_', ' ').title()}*")
-                
+
                 df_sim = parse_similarity_csv(SIMILARITY_DATA[metric_type])
                 similarities = get_similarity_for_framework(df_sim, selected_framework)
-                
+
                 if similarities:
                     for item in similarities:
                         score = item['similarity']
                         pct = score * 100
-                        color = "#10b981" if score >= 0.4 else "#06b6d4" if score >= 0.3 else "#f59e0b" if score >= 0.2 else "#ef4444"
-                        
+                        color = "#16a34a" if score >= 0.4 else "#2563eb" if score >= 0.3 else "#d97706" if score >= 0.2 else "#dc2626"
+
                         st.markdown(
-                            f'<div style="background:#1e293b;padding:12px;border-radius:8px;margin:8px 0;">'
+                            f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;">'
                             f'<div style="display:flex;justify-content:space-between;align-items:center;">'
                             f'<div style="display:flex;align-items:center;gap:8px;">'
-                            f'<div style="width:16px;height:16px;background:{FRAMEWORK_COLORS.get(item["framework"], "#64748b")};border-radius:4px;"></div>'
-                            f'<span style="font-weight:600;">{item["framework"]}</span>'
+                            f'<div style="width:16px;height:16px;background:{FRAMEWORK_COLORS.get(item["framework"], "#888888")};border-radius:4px;"></div>'
+                            f'<span style="font-weight:600;color:#1a1a1a;">{item["framework"]}</span>'
                             f'</div>'
                             f'<span style="color:{color};font-weight:700;font-family:monospace;">{pct:.1f}%</span>'
                             f'</div>'
-                            f'<div style="background:#334155;border-radius:4px;height:8px;margin-top:8px;overflow:hidden;">'
+                            f'<div style="background:#e0e0e0;border-radius:4px;height:8px;margin-top:8px;overflow:hidden;">'
                             f'<div style="background:{color};height:100%;width:{pct}%;"></div>'
                             f'</div>'
                             f'</div>',
@@ -768,12 +823,12 @@ def main():
                         )
                 else:
                     st.info(f"No similarity data available for {selected_framework} under {metric_type}")
-        
+
         # About section
         with st.expander("About the Frameworks"):
             for fw, name in FRAMEWORK_FULL_NAMES.items():
                 st.markdown(f"**{fw}** - {name}")
-    
+
     # ============================================
     # TAB 2: REPORT ANALYZER
     # ============================================
@@ -781,48 +836,67 @@ def main():
         st.header("ESG Report Comparison Tool")
         st.markdown(
             "Upload your transition plan or ESG report PDF to analyze how well it aligns with sustainability frameworks. "
-            "Uses **spacy-universal-sentence-encoder** with `nlp.similarity()` - the exact same method from the Jupyter notebook."
+            "Uses **Claude Haiku 4.5** to classify your report requirement-by-requirement — finding relevant text across the "
+            "full document, classifying coverage, and providing a rationale for each."
         )
-        
+
+        # API key input
+        api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            placeholder="sk-ant-...",
+            help="Required for analysis. Your key is not stored. Get one at console.anthropic.com"
+        )
+
         col1, col2 = st.columns([1, 1])
-        
+
         with col1:
             # Framework selection
             st.subheader("Select Frameworks")
-            st.markdown("⚡ *Tip: Select fewer frameworks for faster analysis*")
-            
+            st.markdown("*Tip: Select fewer frameworks for faster analysis*")
+
+            # Use frameworks available in the loaded Excel
+            available_frameworks = list(framework_requirements.keys()) if framework_requirements else list(FRAMEWORK_COLORS.keys())
+
             col_sel1, col_sel2 = st.columns(2)
             with col_sel1:
                 if st.button("Select All"):
-                    st.session_state.selected_frameworks = list(FRAMEWORK_COLORS.keys())
+                    st.session_state.selected_frameworks = available_frameworks.copy()
             with col_sel2:
                 if st.button("Clear All"):
                     st.session_state.selected_frameworks = []
-            
+
             # Initialize session state
             if 'selected_frameworks' not in st.session_state:
                 st.session_state.selected_frameworks = ["TCFD", "TNFD"]
-            
+
             # Framework checkboxes
             selected_frameworks = []
             cols = st.columns(2)
-            for i, (fw, color) in enumerate(FRAMEWORK_COLORS.items()):
+            for i, fw in enumerate(available_frameworks):
+                color = FRAMEWORK_COLORS.get(fw, "#888888")
                 with cols[i % 2]:
+                    # Count requirements for this framework
+                    req_count = sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
                     checked = st.checkbox(
                         f"{fw}",
                         value=fw in st.session_state.selected_frameworks,
                         key=f"fw_{fw}",
-                        help=FRAMEWORK_FULL_NAMES[fw]
+                        help=f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} ({req_count} requirements)"
                     )
                     if checked:
                         selected_frameworks.append(fw)
-            
+
             st.session_state.selected_frameworks = selected_frameworks
-            
-            st.markdown(f"**{len(selected_frameworks)}** framework(s) selected")
+
+            total_reqs = sum(
+                sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+                for fw in selected_frameworks
+            )
+            st.markdown(f"**{len(selected_frameworks)}** framework(s) selected · **{total_reqs}** requirements")
             if selected_frameworks:
-                st.markdown(f"*Estimated time: ~{len(selected_frameworks) * 15} seconds*")
-            
+                st.markdown(f"*Estimated time: ~{len(selected_frameworks) * 8} seconds (1 API call per framework)*")
+
             # File upload
             st.subheader("Upload Document")
             uploaded_file = st.file_uploader(
@@ -830,7 +904,7 @@ def main():
                 type="pdf",
                 help="Upload your ESG report or transition plan PDF"
             )
-            
+
             # Or paste text
             st.markdown("**Or paste text:**")
             pasted_text = st.text_area(
@@ -838,24 +912,18 @@ def main():
                 height=150,
                 placeholder="Paste your ESG report content..."
             )
-            
+
             # Analyze button
-            analyze_disabled = (not uploaded_file and not pasted_text) or len(selected_frameworks) == 0
-            
-            if st.button("🔍 Analyze Report", disabled=analyze_disabled, type="primary"):
-                if len(selected_frameworks) == 0:
+            analyze_disabled = (not uploaded_file and not pasted_text) or len(selected_frameworks) == 0 or not api_key
+
+            if st.button("Analyze Report", disabled=analyze_disabled, type="primary"):
+                if not api_key:
+                    st.error("Please enter your Anthropic API key")
+                elif len(selected_frameworks) == 0:
                     st.error("Please select at least one framework")
                 elif not uploaded_file and not pasted_text:
                     st.error("Please upload a PDF or paste text")
                 else:
-                    with st.spinner("Loading model..."):
-                        try:
-                            nlp = load_nlp_model()
-                            st.success("Model loaded!")
-                        except Exception as e:
-                            st.error(f"Failed to load model: {e}")
-                            st.stop()
-                    
                     # Extract text
                     if uploaded_file:
                         with st.spinner("Extracting text from PDF..."):
@@ -866,80 +934,165 @@ def main():
                                 st.error(f"Failed to extract PDF: {e}")
                                 st.stop()
                     else:
-                        # Split pasted text into paragraphs
                         text_list = [p.strip().replace('\n', ' ') for p in pasted_text.split('\n\n') if p.strip()]
                         st.info(f"Processing {len(text_list)} paragraphs")
-                    
+
+                    # Combine all pages into single report text for Claude
+                    report_text = "\n\n".join(text_list)
+
                     # Run analysis
-                    st.markdown("### Analyzing...")
+                    st.markdown("### Analyzing with Claude Haiku 4.5...")
                     progress_bar = st.progress(0)
-                    
+
                     try:
-                        results, framework_averages = document_similarity(
-                            text_list, 
+                        results, framework_summaries, token_usage = claude_analyze_report(
+                            report_text,
                             selected_frameworks,
+                            api_key,
+                            framework_requirements,
                             progress_bar
                         )
-                        
+
                         # Store results in session state
                         st.session_state.analysis_results = results
-                        st.session_state.framework_averages = framework_averages
+                        st.session_state.framework_summaries = framework_summaries
                         st.session_state.num_pages = len(text_list)
-                        
+                        st.session_state.token_usage = token_usage
+
                         st.success("Analysis complete!")
+                    except anthropic.AuthenticationError:
+                        st.error("Invalid API key. Please check your Anthropic API key.")
                     except Exception as e:
                         st.error(f"Analysis failed: {e}")
-        
+
         with col2:
             st.subheader("Results")
-            
+
             if 'analysis_results' in st.session_state and st.session_state.analysis_results:
                 results = st.session_state.analysis_results
-                framework_averages = st.session_state.framework_averages
+                framework_summaries = st.session_state.framework_summaries
                 num_pages = st.session_state.num_pages
-                
-                # Summary
-                avg_score = sum(r['score'] for r in results) / len(results)
-                top_fw = max(framework_averages.items(), key=lambda x: x[1])
-                
-                st.markdown(
-                    f'<div style="background:linear-gradient(to right, rgba(16,185,129,0.2), rgba(6,182,212,0.2));'
-                    f'border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:16px;margin-bottom:16px;">'
-                    f'<h4 style="margin:0 0 8px 0;">📊 Analysis Summary</h4>'
-                    f'<p style="margin:0;color:#cbd5e1;">Analyzed {num_pages} pages. '
-                    f'Average similarity: <strong>{avg_score*100:.1f}%</strong>. '
-                    f'Best alignment with <strong>{top_fw[0]}</strong> ({top_fw[1]*100:.1f}%).</p>'
-                    f'</div>',
-                    unsafe_allow_html=True
+                token_usage = st.session_state.get('token_usage', {})
+
+                # Overall summary
+                total_results = len(results)
+                covers_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_COVERS)
+                partly_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_PARTLY)
+                doesnt_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_DOESNT)
+
+                # Find best framework
+                best_fw = max(framework_summaries.items(), key=lambda x: x[1]['avg_score']) if framework_summaries else None
+
+                summary_html = (
+                    f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:16px;margin-bottom:16px;">'
+                    f'<h4 style="margin:0 0 12px 0;color:#1a1a1a;">Analysis Summary</h4>'
+                    f'<p style="margin:0 0 8px 0;color:#333333;">Analyzed <strong>{num_pages}</strong> pages against '
+                    f'<strong>{len(framework_summaries)}</strong> frameworks '
+                    f'({total_results} requirements total).</p>'
+                    f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;">'
+                    f'<span class="badge-covers">{covers_count} Covers</span>'
+                    f'<span class="badge-partly">{partly_count} Partly covers</span>'
+                    f'<span class="badge-doesnt">{doesnt_count} Doesn\'t cover</span>'
+                    f'</div>'
                 )
-                
+                if best_fw:
+                    summary_html += (
+                        f'<p style="margin:8px 0 0 0;color:#333333;">Best alignment with '
+                        f'<strong>{best_fw[0]}</strong>.</p>'
+                    )
+                summary_html += '</div>'
+                st.markdown(summary_html, unsafe_allow_html=True)
+
+                # Cost estimate
+                if token_usage:
+                    input_cost = token_usage.get('input_tokens', 0) / 1_000_000 * 1.0
+                    output_cost = token_usage.get('output_tokens', 0) / 1_000_000 * 5.0
+                    cache_reads = token_usage.get('cache_read_tokens', 0)
+                    cache_savings = cache_reads / 1_000_000 * 0.9
+                    total_cost = input_cost + output_cost
+
+                    st.markdown(
+                        f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#333333;">'
+                        f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
+                        f'({token_usage.get("input_tokens", 0):,} input / {token_usage.get("output_tokens", 0):,} output tokens) '
+                        f'{"· Cache saved ~$" + f"{cache_savings:.4f}" if cache_reads > 0 else ""}'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
                 # Results by framework
                 for framework in st.session_state.selected_frameworks:
                     fw_results = [r for r in results if r['framework'] == framework]
                     if not fw_results:
                         continue
-                    
-                    avg = sum(r['score'] for r in fw_results) / len(fw_results)
-                    
-                    with st.expander(f"**{framework}** - Avg: {avg*100:.1f}%", expanded=True):
+
+                    summary = framework_summaries.get(framework, {})
+                    counts = summary.get("counts", {})
+                    c_count = counts.get(CLASSIFICATION_COVERS, 0)
+                    p_count = counts.get(CLASSIFICATION_PARTLY, 0)
+                    d_count = counts.get(CLASSIFICATION_DOESNT, 0)
+
+                    with st.expander(
+                        f"**{framework}** — {c_count} cover · {p_count} partly · {d_count} don't cover",
+                        expanded=True
+                    ):
+                        # Group results by topic
+                        topics_seen = []
                         for r in fw_results:
-                            score = r['score']
-                            pct = score * 100
-                            color = "#10b981" if score >= 0.4 else "#06b6d4" if score >= 0.3 else "#f59e0b" if score >= 0.2 else "#ef4444"
-                            
-                            st.markdown(
-                                f'<div style="background:#1e293b;padding:12px;border-radius:8px;margin:8px 0;">'
-                                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                                f'<span style="font-weight:500;">{r["topic"]}</span>'
-                                f'<span style="color:{color};font-weight:700;font-family:monospace;">{pct:.1f}%</span>'
-                                f'</div>'
-                                f'<div style="background:#334155;border-radius:4px;height:6px;margin:8px 0;overflow:hidden;">'
-                                f'<div style="background:{color};height:100%;width:{pct}%;"></div>'
-                                f'</div>'
-                                f'<p style="margin:0;font-size:12px;color:#64748b;">{r["explanation"]}</p>'
-                                f'</div>',
-                                unsafe_allow_html=True
-                            )
+                            if r["topic"] not in topics_seen:
+                                topics_seen.append(r["topic"])
+
+                        for topic in topics_seen:
+                            topic_results = [r for r in fw_results if r["topic"] == topic]
+                            st.markdown(f"**{topic}**")
+
+                            for r in topic_results:
+                                classification = r['classification']
+                                color = CLASSIFICATION_COLORS.get(classification, "#888")
+                                badge_class = CLASSIFICATION_BADGES.get(classification, "badge-doesnt")
+
+                                # Build extracts HTML
+                                extracts = r.get("relevant_extracts", [])
+                                if extracts:
+                                    extracts_html = "".join(
+                                        f'<div style="background:#fafafa;border-left:3px solid {color};'
+                                        f'padding:6px 10px;margin:4px 0;border-radius:0 4px 4px 0;'
+                                        f'font-size:12px;color:#555555;font-style:italic;">'
+                                        f'"{extract}"</div>'
+                                        for extract in extracts
+                                    )
+                                    extracts_section = (
+                                        f'<p style="margin:8px 0 4px 0;font-size:11px;color:#888888;'
+                                        f'text-transform:uppercase;letter-spacing:0.5px;">Relevant text found:</p>'
+                                        f'{extracts_html}'
+                                    )
+                                else:
+                                    extracts_section = (
+                                        f'<p style="margin:8px 0 4px 0;font-size:12px;color:#dc2626;'
+                                        f'font-style:italic;">No relevant text found in report</p>'
+                                    )
+
+                                # Truncate long requirements for display
+                                req_text = r.get("requirement", "")
+                                if len(req_text) > 200:
+                                    req_text = req_text[:200] + "…"
+
+                                st.markdown(
+                                    f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;'
+                                    f'border-left:4px solid {color};">'
+                                    # Classification badge + requirement
+                                    f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">'
+                                    f'<span style="font-size:13px;color:#1a1a1a;flex:1;">{req_text}</span>'
+                                    f'<span class="{badge_class}" style="white-space:nowrap;">{classification}</span>'
+                                    f'</div>'
+                                    # Extracts
+                                    f'{extracts_section}'
+                                    # Rationale
+                                    f'<p style="margin:8px 0 0 0;font-size:12px;color:#222222;">'
+                                    f'<strong>Rationale:</strong> {r.get("rationale", "")}</p>'
+                                    f'</div>',
+                                    unsafe_allow_html=True
+                                )
             else:
                 st.info("Upload a document and click 'Analyze Report' to see results")
 
