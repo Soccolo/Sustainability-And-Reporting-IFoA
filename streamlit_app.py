@@ -578,7 +578,7 @@ def extract_text_from_pdf(pdf_file):
 
 def claude_analyze_report(report_text, selected_frameworks, api_key, framework_requirements, progress_bar=None):
     """
-    Use Claude Haiku 4.5 to assess a report requirement-by-requirement.
+    Use Claude to assess a report requirement-by-requirement.
 
     For each framework requirement, Claude:
     1. Searches the full report for all relevant passages
@@ -588,8 +588,12 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
        - "Doesn't cover the framework"
     3. Provides a rationale referencing the specific text found
 
+    Model strategy:
+    - Tries claude-haiku-4-5 first (cheapest: $1/$5 per MTok)
+    - Falls back to claude-sonnet-4 if Haiku hits rate limits or input size limits
+    - Once fallback is triggered, stays on Sonnet for remaining frameworks
+
     Cost optimisation:
-    - Uses claude-haiku-4-5-20251001 (cheapest model: $1/$5 per MTok)
     - Prompt caching: report text in system message is cached across calls
       (cache reads are 90% cheaper than fresh input)
     - One API call per framework batches all its requirements together
@@ -633,6 +637,12 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
     output_tokens_total = 0
     cache_read_tokens_total = 0
     cache_write_tokens_total = 0
+    models_used = set()  # Track which models were actually used
+
+    # Model fallback order: try Haiku first (cheapest), fall back to Sonnet if rate-limited
+    PRIMARY_MODEL = "claude-haiku-4-5-20251001"
+    FALLBACK_MODEL = "claude-sonnet-4-20250514"
+    use_fallback = False  # Once we switch, stay on Sonnet for remaining frameworks
 
     for step, framework in enumerate(selected_frameworks):
         if framework not in framework_requirements:
@@ -669,14 +679,57 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
             "No markdown, no backticks, no preamble — just the raw JSON array."
         )
 
+        # Determine which model to use
+        model = FALLBACK_MODEL if use_fallback else PRIMARY_MODEL
+        response = None
+
         try:
             response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model=model,
                 max_tokens=8192,
                 system=system_message,
                 messages=[{"role": "user", "content": requirements_text}]
             )
+            models_used.add(model)
 
+        except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
+            # If Haiku fails with rate limit or overload, try Sonnet
+            if model == PRIMARY_MODEL:
+                st.warning(
+                    f"Haiku rate limit hit on {framework} — switching to Sonnet for remaining frameworks."
+                )
+                use_fallback = True
+                try:
+                    response = client.messages.create(
+                        model=FALLBACK_MODEL,
+                        max_tokens=8192,
+                        system=system_message,
+                        messages=[{"role": "user", "content": requirements_text}]
+                    )
+                    models_used.add(FALLBACK_MODEL)
+                except anthropic.APIError as e2:
+                    st.error(f"Sonnet also failed for {framework}: {e2}")
+                    if progress_bar:
+                        progress_bar.progress((step + 1) / total_steps)
+                    continue
+            else:
+                st.error(f"API error for {framework}: {e}")
+                if progress_bar:
+                    progress_bar.progress((step + 1) / total_steps)
+                continue
+
+        except anthropic.APIError as e:
+            st.error(f"API error for {framework}: {e}")
+            if progress_bar:
+                progress_bar.progress((step + 1) / total_steps)
+            continue
+
+        if response is None:
+            if progress_bar:
+                progress_bar.progress((step + 1) / total_steps)
+            continue
+
+        try:
             # Track token usage
             usage = response.usage
             input_tokens_total += usage.input_tokens
@@ -718,8 +771,6 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
         except json.JSONDecodeError as e:
             st.warning(f"Could not parse response for {framework}. Raw response saved for debugging.")
             st.code(raw_text[:500], language="json")
-        except anthropic.APIError as e:
-            st.error(f"API error for {framework}: {e}")
 
         if progress_bar:
             progress_bar.progress((step + 1) / total_steps)
@@ -746,6 +797,7 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
         "output_tokens": output_tokens_total,
         "cache_read_tokens": cache_read_tokens_total,
         "cache_write_tokens": cache_write_tokens_total,
+        "models_used": models_used,
     }
 
     return results, framework_summaries, token_usage
@@ -967,8 +1019,8 @@ def main():
         st.header("ESG Report Comparison Tool")
         st.markdown(
             "Upload your transition plan or ESG report PDF to analyze how well it aligns with sustainability frameworks. "
-            "Uses **Claude Haiku 4.5** to classify your report requirement-by-requirement — finding relevant text across the "
-            "full document, classifying coverage, and providing a rationale for each."
+            "Uses **Claude Haiku 4.5** to classify your report requirement-by-requirement (falls back to **Sonnet 4** for "
+            "large documents) — finding relevant text across the full document, classifying coverage, and providing a rationale for each."
         )
 
         # API key input
@@ -1111,7 +1163,7 @@ def main():
                     report_text = "\n\n".join(text_list)
 
                     # Run analysis
-                    st.markdown("### Analyzing with Claude Haiku 4.5...")
+                    st.markdown("### Analyzing with Claude...")
                     progress_bar = st.progress(0)
 
                     try:
@@ -1175,17 +1227,50 @@ def main():
 
                 # Cost estimate
                 if token_usage:
-                    input_cost = token_usage.get('input_tokens', 0) / 1_000_000 * 1.0
-                    output_cost = token_usage.get('output_tokens', 0) / 1_000_000 * 5.0
+                    # Cost depends on which models were used
+                    # Haiku: $1/$5 per MTok input/output; Sonnet: $3/$15 per MTok
+                    models_used = token_usage.get('models_used', set())
+                    used_sonnet = "claude-sonnet-4-20250514" in models_used
+                    used_haiku = "claude-haiku-4-5-20251001" in models_used
+
+                    # Conservative estimate: if both models used, use blended upper bound
+                    if used_sonnet and used_haiku:
+                        model_label = "Haiku 4.5 + Sonnet 4 (fallback)"
+                        # Use Sonnet pricing as upper bound since we can't split per-model
+                        input_rate, output_rate = 3.0, 15.0
+                    elif used_sonnet:
+                        model_label = "Sonnet 4 (fallback)"
+                        input_rate, output_rate = 3.0, 15.0
+                    else:
+                        model_label = "Haiku 4.5"
+                        input_rate, output_rate = 1.0, 5.0
+
+                    input_cost = token_usage.get('input_tokens', 0) / 1_000_000 * input_rate
+                    output_cost = token_usage.get('output_tokens', 0) / 1_000_000 * output_rate
                     cache_reads = token_usage.get('cache_read_tokens', 0)
-                    cache_savings = cache_reads / 1_000_000 * 0.9
+                    cache_savings = cache_reads / 1_000_000 * (input_rate * 0.9)
                     total_cost = input_cost + output_cost
+
+                    model_note = ""
+                    if used_sonnet and used_haiku:
+                        model_note = (
+                            "<br><em style='font-size:12px;color:#d97706;'>"
+                            "⚠ Haiku hit rate limits — some frameworks analysed with Sonnet. "
+                            "Cost shown is upper-bound estimate.</em>"
+                        )
+                    elif used_sonnet:
+                        model_note = (
+                            "<br><em style='font-size:12px;color:#d97706;'>"
+                            "⚠ Haiku rate-limited — all frameworks analysed with Sonnet.</em>"
+                        )
 
                     st.markdown(
                         f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#333333;">'
+                        f'<strong>Model:</strong> {model_label} · '
                         f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
                         f'({token_usage.get("input_tokens", 0):,} input / {token_usage.get("output_tokens", 0):,} output tokens) '
                         f'{"· Cache saved ~$" + f"{cache_savings:.4f}" if cache_reads > 0 else ""}'
+                        f'{model_note}'
                         f'</div>',
                         unsafe_allow_html=True
                     )
