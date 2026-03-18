@@ -717,7 +717,7 @@ def main():
                 st.markdown(
                     f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">'
                     f'<div style="width:16px;height:16px;background:{color};border-radius:4px;"></div>'
-                    f'<span>{fw}</span>'
+                    f'<span style="color:#1a1a1a;">{fw}</span>'
                     f'<span style="color:#888888;">({count} countries)</span>'
                     f'</div>',
                     unsafe_allow_html=True
