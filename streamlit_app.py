@@ -47,6 +47,41 @@ st.markdown("""
     .stSelectbox label, .stTextInput label, .stTextArea label, .stFileUploader label {
         color: #1a1a1a !important;
     }
+    /* Force light button styling */
+    .stButton > button {
+        background-color: #f0f0f0 !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
+    }
+    .stButton > button:hover {
+        background-color: #e0e0e0 !important;
+        border-color: #b0b0b0 !important;
+    }
+    .stButton > button[kind="primary"] {
+        background-color: #ff4b4b !important;
+        color: #ffffff !important;
+        border: none !important;
+    }
+    /* File uploader fix */
+    .stFileUploader section {
+        background-color: #f5f5f5 !important;
+        border-color: #d0d0d0 !important;
+    }
+    .stFileUploader section span, .stFileUploader section small {
+        color: #555555 !important;
+    }
+    .stFileUploader section button {
+        background-color: #ffffff !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d0d0d0 !important;
+    }
+    /* Select boxes and inputs */
+    [data-baseweb="select"], [data-baseweb="input"], [data-baseweb="textarea"] {
+        background-color: #ffffff !important;
+    }
+    [data-baseweb="select"] * , [data-baseweb="input"] * {
+        color: #1a1a1a !important;
+    }
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
