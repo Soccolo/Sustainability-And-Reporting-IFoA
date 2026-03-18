@@ -854,6 +854,280 @@ def get_similarity_for_framework(df, framework):
     return sorted(result, key=lambda x: x['similarity'], reverse=True)
 
 
+def generate_results_excel(results, framework_summaries):
+    """Generate a formatted Excel workbook from analysis results."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+
+    # --- Sheet 1: Summary ---
+    ws_summary = wb.active
+    ws_summary.title = "Summary"
+    header_font = Font(bold=True, size=12, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1a1a1a")
+    green_fill = PatternFill("solid", fgColor="dcfce7")
+    amber_fill = PatternFill("solid", fgColor="fef3c7")
+    red_fill = PatternFill("solid", fgColor="fee2e2")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    summary_headers = ["Framework", "Covers", "Partly Covers", "Doesn't Cover", "Total Requirements"]
+    for col, h in enumerate(summary_headers, 1):
+        cell = ws_summary.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = thin_border
+
+    row = 2
+    for fw, s in framework_summaries.items():
+        counts = s.get("counts", {})
+        ws_summary.cell(row=row, column=1, value=fw).border = thin_border
+        c_cell = ws_summary.cell(row=row, column=2, value=counts.get(CLASSIFICATION_COVERS, 0))
+        c_cell.fill = green_fill
+        c_cell.border = thin_border
+        p_cell = ws_summary.cell(row=row, column=3, value=counts.get(CLASSIFICATION_PARTLY, 0))
+        p_cell.fill = amber_fill
+        p_cell.border = thin_border
+        d_cell = ws_summary.cell(row=row, column=4, value=counts.get(CLASSIFICATION_DOESNT, 0))
+        d_cell.fill = red_fill
+        d_cell.border = thin_border
+        ws_summary.cell(row=row, column=5, value=s.get("total", 0)).border = thin_border
+        row += 1
+
+    for col_letter in ["A", "B", "C", "D", "E"]:
+        ws_summary.column_dimensions[col_letter].width = 22
+
+    # --- Sheet 2: Detailed Results ---
+    ws_detail = wb.create_sheet("Detailed Results")
+    detail_headers = ["Framework", "Topic", "Requirement", "Classification", "Rationale", "Relevant Extracts"]
+    for col, h in enumerate(detail_headers, 1):
+        cell = ws_detail.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = thin_border
+
+    for i, r in enumerate(results, 2):
+        ws_detail.cell(row=i, column=1, value=r["framework"]).border = thin_border
+        ws_detail.cell(row=i, column=2, value=r["topic"]).border = thin_border
+        req_cell = ws_detail.cell(row=i, column=3, value=r["requirement"])
+        req_cell.alignment = Alignment(wrap_text=True)
+        req_cell.border = thin_border
+
+        class_cell = ws_detail.cell(row=i, column=4, value=r["classification"])
+        if r["classification"] == CLASSIFICATION_COVERS:
+            class_cell.fill = green_fill
+        elif r["classification"] == CLASSIFICATION_PARTLY:
+            class_cell.fill = amber_fill
+        else:
+            class_cell.fill = red_fill
+        class_cell.border = thin_border
+
+        ws_detail.cell(row=i, column=5, value=r.get("rationale", "")).border = thin_border
+        ws_detail.cell(
+            row=i, column=6,
+            value="; ".join(r.get("relevant_extracts", []))
+        ).border = thin_border
+
+    ws_detail.column_dimensions["A"].width = 14
+    ws_detail.column_dimensions["B"].width = 18
+    ws_detail.column_dimensions["C"].width = 50
+    ws_detail.column_dimensions["D"].width = 26
+    ws_detail.column_dimensions["E"].width = 50
+    ws_detail.column_dimensions["F"].width = 50
+
+    # --- Sheet 3: Gap Analysis ---
+    ws_gap = wb.create_sheet("Gap Analysis")
+    gap_headers = ["Framework", "Topic", "Requirement", "Classification", "Rationale"]
+    for col, h in enumerate(gap_headers, 1):
+        cell = ws_gap.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = thin_border
+
+    gap_row = 2
+    for r in results:
+        if r["classification"] != CLASSIFICATION_COVERS:
+            ws_gap.cell(row=gap_row, column=1, value=r["framework"]).border = thin_border
+            ws_gap.cell(row=gap_row, column=2, value=r["topic"]).border = thin_border
+            ws_gap.cell(row=gap_row, column=3, value=r["requirement"]).border = thin_border
+            class_cell = ws_gap.cell(row=gap_row, column=4, value=r["classification"])
+            class_cell.fill = amber_fill if r["classification"] == CLASSIFICATION_PARTLY else red_fill
+            class_cell.border = thin_border
+            ws_gap.cell(row=gap_row, column=5, value=r.get("rationale", "")).border = thin_border
+            gap_row += 1
+
+    ws_gap.column_dimensions["A"].width = 14
+    ws_gap.column_dimensions["B"].width = 18
+    ws_gap.column_dimensions["C"].width = 50
+    ws_gap.column_dimensions["D"].width = 26
+    ws_gap.column_dimensions["E"].width = 50
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def render_gap_analysis(results, framework_summaries):
+    """Render a gap analysis summary — grouped by framework, showing only gaps."""
+    gaps = [r for r in results if r["classification"] != CLASSIFICATION_COVERS]
+
+    if not gaps:
+        st.success("No gaps found — the report covers all analysed requirements.")
+        return
+
+    doesnt_count = sum(1 for r in gaps if r["classification"] == CLASSIFICATION_DOESNT)
+    partly_count = sum(1 for r in gaps if r["classification"] == CLASSIFICATION_PARTLY)
+
+    st.markdown(
+        f'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin-bottom:16px;">'
+        f'<h4 style="margin:0 0 8px 0;color:#9a3412;">Gap Analysis — What\'s Missing</h4>'
+        f'<p style="margin:0;color:#333333;">'
+        f'<span class="badge-doesnt">{doesnt_count} not covered</span>&nbsp;&nbsp;'
+        f'<span class="badge-partly">{partly_count} partly covered</span>&nbsp;&nbsp;'
+        f'— these requirements need attention.</p>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+
+    # Group by framework
+    frameworks_in_gaps = []
+    for r in gaps:
+        if r["framework"] not in frameworks_in_gaps:
+            frameworks_in_gaps.append(r["framework"])
+
+    for fw in frameworks_in_gaps:
+        fw_gaps = [r for r in gaps if r["framework"] == fw]
+        doesnt = [r for r in fw_gaps if r["classification"] == CLASSIFICATION_DOESNT]
+        partly = [r for r in fw_gaps if r["classification"] == CLASSIFICATION_PARTLY]
+
+        with st.expander(f"**{fw}** — {len(doesnt)} not covered · {len(partly)} partly covered"):
+            # Not covered first (most urgent)
+            if doesnt:
+                st.markdown("**Not covered** — action required:")
+                for r in doesnt:
+                    req_text = r["requirement"]
+                    if len(req_text) > 200:
+                        req_text = req_text[:200] + "…"
+                    st.markdown(
+                        f'<div style="background:#fee2e2;padding:10px;border-radius:6px;margin:6px 0;'
+                        f'border-left:4px solid #dc2626;">'
+                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
+                        f'<strong>[{r["topic"]}]</strong> {req_text}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+            if partly:
+                st.markdown("**Partly covered** — could be strengthened:")
+                for r in partly:
+                    req_text = r["requirement"]
+                    if len(req_text) > 200:
+                        req_text = req_text[:200] + "…"
+                    st.markdown(
+                        f'<div style="background:#fef3c7;padding:10px;border-radius:6px;margin:6px 0;'
+                        f'border-left:4px solid #d97706;">'
+                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
+                        f'<strong>[{r["topic"]}]</strong> {req_text}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
+
+
+def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frameworks):
+    """Generate an Excel workbook comparing two sets of results."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Comparison"
+
+    header_font = Font(bold=True, size=11, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="1a1a1a")
+    green_fill = PatternFill("solid", fgColor="dcfce7")
+    amber_fill = PatternFill("solid", fgColor="fef3c7")
+    red_fill = PatternFill("solid", fgColor="fee2e2")
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    headers = ["Framework", "Topic", "Requirement", f"{name_a}", f"{name_b}", "Difference"]
+    for col, h in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", wrap_text=True)
+        cell.border = thin_border
+
+    # Build lookup for results_b
+    b_lookup = {}
+    for r in results_b:
+        key = (r["framework"], r["topic"], r["requirement"][:100])
+        b_lookup[key] = r
+
+    row = 2
+    for r_a in results_a:
+        if r_a["framework"] not in common_frameworks:
+            continue
+        key = (r_a["framework"], r_a["topic"], r_a["requirement"][:100])
+        r_b = b_lookup.get(key)
+
+        ws.cell(row=row, column=1, value=r_a["framework"]).border = thin_border
+        ws.cell(row=row, column=2, value=r_a["topic"]).border = thin_border
+        req_text = r_a["requirement"]
+        if len(req_text) > 150:
+            req_text = req_text[:150] + "…"
+        ws.cell(row=row, column=3, value=req_text).border = thin_border
+
+        cell_a = ws.cell(row=row, column=4, value=r_a["classification"])
+        fill_map = {CLASSIFICATION_COVERS: green_fill, CLASSIFICATION_PARTLY: amber_fill, CLASSIFICATION_DOESNT: red_fill}
+        cell_a.fill = fill_map.get(r_a["classification"], PatternFill())
+        cell_a.border = thin_border
+
+        if r_b:
+            cell_b = ws.cell(row=row, column=5, value=r_b["classification"])
+            cell_b.fill = fill_map.get(r_b["classification"], PatternFill())
+            cell_b.border = thin_border
+
+            # Difference
+            score_a = classification_to_score(r_a["classification"])
+            score_b = classification_to_score(r_b["classification"])
+            if score_a > score_b:
+                diff = f"{name_a} better"
+            elif score_b > score_a:
+                diff = f"{name_b} better"
+            else:
+                diff = "Same"
+            ws.cell(row=row, column=6, value=diff).border = thin_border
+        else:
+            ws.cell(row=row, column=5, value="N/A").border = thin_border
+            ws.cell(row=row, column=6, value="—").border = thin_border
+
+        row += 1
+
+    ws.column_dimensions["A"].width = 14
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 45
+    ws.column_dimensions["D"].width = 26
+    ws.column_dimensions["E"].width = 26
+    ws.column_dimensions["F"].width = 18
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
 # ============================================
 # MAIN APP
 # ============================================
@@ -865,7 +1139,7 @@ def main():
     # Load requirements from Excel once
     framework_requirements = load_framework_requirements()
 
-    tab1, tab2 = st.tabs(["Framework Map", "Report Analyzer"])
+    tab1, tab2, tab3 = st.tabs(["Framework Map", "Report Analyzer", "Side-by-Side Comparison"])
 
     # ============================================
     # TAB 1: FRAMEWORK MAP
@@ -1348,8 +1622,328 @@ def main():
                                     f'</div>',
                                     unsafe_allow_html=True
                                 )
+
+                # --- Gap Analysis ---
+                st.markdown("---")
+                st.subheader("Gap Analysis")
+                render_gap_analysis(results, framework_summaries)
+
+                # --- Export ---
+                st.markdown("---")
+                st.subheader("Export Results")
+
+                excel_data = generate_results_excel(results, framework_summaries)
+                st.download_button(
+                    label="Download Results as Excel",
+                    data=excel_data,
+                    file_name="framework_analysis_results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
             else:
                 st.info("Upload a document and click 'Analyze Report' to see results")
+
+    # ============================================
+    # TAB 3: SIDE-BY-SIDE COMPARISON
+    # ============================================
+    with tab3:
+        st.header("Side-by-Side Report Comparison")
+        st.markdown(
+            "Upload two ESG reports to compare how each covers the same framework requirements. "
+            "Useful for benchmarking year-on-year progress or comparing two firms' disclosures."
+        )
+
+        # API key for comparison
+        cmp_api_key = st.text_input(
+            "Anthropic API Key",
+            type="password",
+            placeholder="sk-ant-...",
+            help="Required for analysis. Your key is not stored.",
+            key="cmp_api_key"
+        )
+
+        # Available frameworks from Excel
+        available_frameworks = list(framework_requirements.keys()) if framework_requirements else list(FRAMEWORK_COLORS.keys())
+
+        # Framework selection for comparison
+        st.subheader("Select Frameworks to Compare")
+        st.markdown("*Select the same frameworks for both reports.*")
+
+        cmp_col_sel1, cmp_col_sel2 = st.columns(2)
+        with cmp_col_sel1:
+            if st.button("Select All", key="cmp_select_all"):
+                st.session_state.cmp_selected_frameworks = available_frameworks.copy()
+        with cmp_col_sel2:
+            if st.button("Clear All", key="cmp_clear_all"):
+                st.session_state.cmp_selected_frameworks = []
+
+        if 'cmp_selected_frameworks' not in st.session_state:
+            st.session_state.cmp_selected_frameworks = ["TCFD", "TNFD"]
+
+        cmp_selected = []
+        cmp_cols = st.columns(3)
+        for i, fw in enumerate(available_frameworks):
+            with cmp_cols[i % 3]:
+                req_count = sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+                checked = st.checkbox(
+                    f"{fw}",
+                    value=fw in st.session_state.cmp_selected_frameworks,
+                    key=f"cmp_fw_{fw}",
+                    help=f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} ({req_count} requirements)"
+                )
+                if checked:
+                    cmp_selected.append(fw)
+        st.session_state.cmp_selected_frameworks = cmp_selected
+
+        cmp_total_reqs = sum(
+            sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+            for fw in cmp_selected
+        )
+        st.markdown(f"**{len(cmp_selected)}** framework(s) · **{cmp_total_reqs}** requirements each")
+
+        # Two-column upload
+        st.subheader("Upload Two Reports")
+        up_col1, up_col2 = st.columns(2)
+
+        with up_col1:
+            st.markdown("**Report A**")
+            cmp_name_a = st.text_input("Label for Report A", value="Report A", key="cmp_name_a")
+            cmp_file_a = st.file_uploader("Upload PDF", type="pdf", key="cmp_file_a")
+            cmp_page_start_a, cmp_page_end_a = 1, None
+            if cmp_file_a:
+                import pymupdf
+                bytes_a = cmp_file_a.read()
+                cmp_file_a.seek(0)
+                with pymupdf.open(stream=bytes_a, filetype="pdf") as doc:
+                    total_a = len(doc)
+                st.markdown(f"*{total_a} pages*")
+                pa_c1, pa_c2 = st.columns(2)
+                with pa_c1:
+                    cmp_page_start_a = st.number_input("From page", 1, total_a, 1, key="cmp_ps_a")
+                with pa_c2:
+                    cmp_page_end_a = st.number_input("To page", 1, total_a, total_a, key="cmp_pe_a")
+
+        with up_col2:
+            st.markdown("**Report B**")
+            cmp_name_b = st.text_input("Label for Report B", value="Report B", key="cmp_name_b")
+            cmp_file_b = st.file_uploader("Upload PDF", type="pdf", key="cmp_file_b")
+            cmp_page_start_b, cmp_page_end_b = 1, None
+            if cmp_file_b:
+                import pymupdf
+                bytes_b = cmp_file_b.read()
+                cmp_file_b.seek(0)
+                with pymupdf.open(stream=bytes_b, filetype="pdf") as doc:
+                    total_b = len(doc)
+                st.markdown(f"*{total_b} pages*")
+                pb_c1, pb_c2 = st.columns(2)
+                with pb_c1:
+                    cmp_page_start_b = st.number_input("From page", 1, total_b, 1, key="cmp_ps_b")
+                with pb_c2:
+                    cmp_page_end_b = st.number_input("To page", 1, total_b, total_b, key="cmp_pe_b")
+
+        # Compare button
+        cmp_disabled = (not cmp_file_a or not cmp_file_b) or len(cmp_selected) == 0 or not cmp_api_key
+        if st.button("Compare Reports", disabled=cmp_disabled, type="primary", key="cmp_run"):
+            if not cmp_api_key:
+                st.error("Please enter your Anthropic API key")
+            elif not cmp_file_a or not cmp_file_b:
+                st.error("Please upload both PDFs")
+            elif len(cmp_selected) == 0:
+                st.error("Please select at least one framework")
+            else:
+                # Extract text from both
+                with st.spinner(f"Extracting text from {cmp_name_a}..."):
+                    text_a = extract_text_from_pdf(cmp_file_a)
+                    start_a = max(0, cmp_page_start_a - 1)
+                    end_a = cmp_page_end_a if cmp_page_end_a else len(text_a)
+                    text_a = text_a[start_a:end_a]
+
+                with st.spinner(f"Extracting text from {cmp_name_b}..."):
+                    text_b = extract_text_from_pdf(cmp_file_b)
+                    start_b = max(0, cmp_page_start_b - 1)
+                    end_b = cmp_page_end_b if cmp_page_end_b else len(text_b)
+                    text_b = text_b[start_b:end_b]
+
+                report_a = "\n\n".join(text_a)
+                report_b = "\n\n".join(text_b)
+
+                # Analyse Report A
+                st.markdown(f"### Analysing {cmp_name_a}...")
+                progress_a = st.progress(0)
+                try:
+                    results_a, summaries_a, usage_a = claude_analyze_report(
+                        report_a, cmp_selected, cmp_api_key, framework_requirements, progress_a
+                    )
+                except Exception as e:
+                    st.error(f"Failed on {cmp_name_a}: {e}")
+                    results_a, summaries_a = [], {}
+
+                # Analyse Report B
+                st.markdown(f"### Analysing {cmp_name_b}...")
+                progress_b = st.progress(0)
+                try:
+                    results_b, summaries_b, usage_b = claude_analyze_report(
+                        report_b, cmp_selected, cmp_api_key, framework_requirements, progress_b
+                    )
+                except Exception as e:
+                    st.error(f"Failed on {cmp_name_b}: {e}")
+                    results_b, summaries_b = [], {}
+
+                if results_a and results_b:
+                    st.session_state.cmp_results_a = results_a
+                    st.session_state.cmp_results_b = results_b
+                    st.session_state.cmp_summaries_a = summaries_a
+                    st.session_state.cmp_summaries_b = summaries_b
+                    st.session_state.cmp_name_a = cmp_name_a
+                    st.session_state.cmp_name_b = cmp_name_b
+                    st.session_state.cmp_frameworks = cmp_selected
+                    st.success("Comparison complete!")
+
+        # --- Display comparison results ---
+        if 'cmp_results_a' in st.session_state and st.session_state.cmp_results_a:
+            results_a = st.session_state.cmp_results_a
+            results_b = st.session_state.cmp_results_b
+            summaries_a = st.session_state.cmp_summaries_a
+            summaries_b = st.session_state.cmp_summaries_b
+            name_a = st.session_state.cmp_name_a
+            name_b = st.session_state.cmp_name_b
+            common_frameworks = st.session_state.cmp_frameworks
+
+            st.markdown("---")
+            st.subheader("Comparison Results")
+
+            # Summary table
+            st.markdown(
+                f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;'
+                f'padding:16px;margin-bottom:16px;">'
+                f'<h4 style="margin:0 0 12px 0;color:#1a1a1a;">Coverage Summary</h4>'
+                f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                f'<tr style="border-bottom:2px solid #e0e0e0;">'
+                f'<th style="text-align:left;padding:6px;color:#1a1a1a;">Framework</th>'
+                f'<th style="text-align:center;padding:6px;color:#1a1a1a;" colspan="3">{name_a}</th>'
+                f'<th style="text-align:center;padding:6px;color:#1a1a1a;" colspan="3">{name_b}</th>'
+                f'</tr>'
+                f'<tr style="border-bottom:1px solid #e0e0e0;font-size:11px;color:#888;">'
+                f'<td></td>'
+                f'<td style="text-align:center;padding:4px;">Covers</td>'
+                f'<td style="text-align:center;padding:4px;">Partly</td>'
+                f'<td style="text-align:center;padding:4px;">Doesn\'t</td>'
+                f'<td style="text-align:center;padding:4px;">Covers</td>'
+                f'<td style="text-align:center;padding:4px;">Partly</td>'
+                f'<td style="text-align:center;padding:4px;">Doesn\'t</td>'
+                f'</tr>',
+                unsafe_allow_html=True
+            )
+
+            table_rows = ""
+            for fw in common_frameworks:
+                sa = summaries_a.get(fw, {}).get("counts", {})
+                sb = summaries_b.get(fw, {}).get("counts", {})
+                table_rows += (
+                    f'<tr style="border-bottom:1px solid #f0f0f0;">'
+                    f'<td style="padding:6px;font-weight:600;color:#1a1a1a;">{fw}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#dcfce7;color:#166534;">'
+                    f'{sa.get(CLASSIFICATION_COVERS, 0)}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#fef3c7;color:#92400e;">'
+                    f'{sa.get(CLASSIFICATION_PARTLY, 0)}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#fee2e2;color:#991b1b;">'
+                    f'{sa.get(CLASSIFICATION_DOESNT, 0)}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#dcfce7;color:#166534;">'
+                    f'{sb.get(CLASSIFICATION_COVERS, 0)}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#fef3c7;color:#92400e;">'
+                    f'{sb.get(CLASSIFICATION_PARTLY, 0)}</td>'
+                    f'<td style="text-align:center;padding:6px;background:#fee2e2;color:#991b1b;">'
+                    f'{sb.get(CLASSIFICATION_DOESNT, 0)}</td>'
+                    f'</tr>'
+                )
+
+            st.markdown(f'{table_rows}</table></div>', unsafe_allow_html=True)
+
+            # Detailed requirement-by-requirement comparison
+            st.subheader("Requirement-by-Requirement")
+
+            # Build lookup for results_b
+            b_lookup = {}
+            for r in results_b:
+                key = (r["framework"], r["topic"], r["requirement"][:100])
+                b_lookup[key] = r
+
+            for fw in common_frameworks:
+                fw_results_a = [r for r in results_a if r["framework"] == fw]
+                if not fw_results_a:
+                    continue
+
+                # Count differences
+                better_a, better_b, same = 0, 0, 0
+                for r_a in fw_results_a:
+                    key = (r_a["framework"], r_a["topic"], r_a["requirement"][:100])
+                    r_b = b_lookup.get(key)
+                    if r_b:
+                        s_a = classification_to_score(r_a["classification"])
+                        s_b = classification_to_score(r_b["classification"])
+                        if s_a > s_b:
+                            better_a += 1
+                        elif s_b > s_a:
+                            better_b += 1
+                        else:
+                            same += 1
+
+                with st.expander(
+                    f"**{fw}** — {name_a} leads on {better_a} · {name_b} leads on {better_b} · {same} same"
+                ):
+                    topics_seen = []
+                    for r in fw_results_a:
+                        if r["topic"] not in topics_seen:
+                            topics_seen.append(r["topic"])
+
+                    for topic in topics_seen:
+                        topic_results = [r for r in fw_results_a if r["topic"] == topic]
+                        st.markdown(f"**{topic}**")
+
+                        for r_a in topic_results:
+                            key = (r_a["framework"], r_a["topic"], r_a["requirement"][:100])
+                            r_b = b_lookup.get(key)
+
+                            class_a = r_a["classification"]
+                            class_b = r_b["classification"] if r_b else CLASSIFICATION_DOESNT
+                            color_a = CLASSIFICATION_COLORS.get(class_a, "#888")
+                            color_b = CLASSIFICATION_COLORS.get(class_b, "#888")
+                            badge_a = CLASSIFICATION_BADGES.get(class_a, "badge-doesnt")
+                            badge_b = CLASSIFICATION_BADGES.get(class_b, "badge-doesnt")
+
+                            req_text = r_a["requirement"]
+                            if len(req_text) > 180:
+                                req_text = req_text[:180] + "…"
+
+                            st.markdown(
+                                f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;">'
+                                f'<p style="margin:0 0 8px 0;font-size:13px;color:#1a1a1a;">{req_text}</p>'
+                                f'<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">'
+                                f'<div style="flex:1;min-width:200px;">'
+                                f'<span style="font-size:11px;color:#888;text-transform:uppercase;">{name_a}</span><br>'
+                                f'<span class="{badge_a}">{class_a}</span>'
+                                f'</div>'
+                                f'<div style="flex:1;min-width:200px;">'
+                                f'<span style="font-size:11px;color:#888;text-transform:uppercase;">{name_b}</span><br>'
+                                f'<span class="{badge_b}">{class_b}</span>'
+                                f'</div>'
+                                f'</div>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+            # Export comparison
+            st.markdown("---")
+            cmp_excel = generate_comparison_excel(
+                results_a, results_b, name_a, name_b, common_frameworks
+            )
+            st.download_button(
+                label="Download Comparison as Excel",
+                data=cmp_excel,
+                file_name="framework_comparison.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="cmp_download"
+            )
 
 
 if __name__ == "__main__":
