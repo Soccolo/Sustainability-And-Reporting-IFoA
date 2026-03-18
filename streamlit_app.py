@@ -35,7 +35,16 @@ st.markdown("""
     .main .block-container {
         padding-top: 2rem;
     }
-    h1, h2, h3 {
+    h1, h2, h3, h4 {
+        color: #1a1a1a !important;
+    }
+    p, span, label, .stMarkdown, .stText {
+        color: #1a1a1a !important;
+    }
+    .stCheckbox label span {
+        color: #1a1a1a !important;
+    }
+    .stSelectbox label, .stTextInput label, .stTextArea label, .stFileUploader label {
         color: #1a1a1a !important;
     }
     .stTabs [data-baseweb="tab-list"] {
