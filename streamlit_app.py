@@ -1836,8 +1836,8 @@ def main():
                     st.session_state.cmp_results_b = results_b
                     st.session_state.cmp_summaries_a = summaries_a
                     st.session_state.cmp_summaries_b = summaries_b
-                    st.session_state.cmp_name_a = cmp_name_a
-                    st.session_state.cmp_name_b = cmp_name_b
+                    st.session_state.cmp_stored_name_a = cmp_name_a
+                    st.session_state.cmp_stored_name_b = cmp_name_b
                     st.session_state.cmp_frameworks = cmp_selected
                     st.success("Comparison complete!")
 
@@ -1847,8 +1847,8 @@ def main():
             results_b = st.session_state.cmp_results_b
             summaries_a = st.session_state.cmp_summaries_a
             summaries_b = st.session_state.cmp_summaries_b
-            name_a = st.session_state.cmp_name_a
-            name_b = st.session_state.cmp_name_b
+            name_a = st.session_state.cmp_stored_name_a
+            name_b = st.session_state.cmp_stored_name_b
             common_frameworks = st.session_state.cmp_frameworks
 
             st.markdown("---")
