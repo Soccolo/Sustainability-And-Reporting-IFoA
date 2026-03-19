@@ -1591,6 +1591,27 @@ def main():
                         unsafe_allow_html=True
                     )
 
+                # --- Export + Gap Analysis (above detailed results for visibility) ---
+                exp_col1, exp_col2 = st.columns([1, 1])
+                with exp_col1:
+                    excel_data = generate_results_excel(results, framework_summaries)
+                    st.download_button(
+                        label="📥 Download Results as Excel",
+                        data=excel_data,
+                        file_name="framework_analysis_results.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                with exp_col2:
+                    if 'show_gap_analysis' not in st.session_state:
+                        st.session_state.show_gap_analysis = False
+                    if st.button("📋 Show / Hide Gap Analysis", key="toggle_gap"):
+                        st.session_state.show_gap_analysis = not st.session_state.show_gap_analysis
+
+                if st.session_state.get('show_gap_analysis', False):
+                    render_gap_analysis(results, framework_summaries)
+
+                st.markdown("---")
+
                 # Results by framework
                 for framework in st.session_state.selected_frameworks:
                     fw_results = [r for r in results if r['framework'] == framework]
@@ -1664,23 +1685,6 @@ def main():
                                     f'</div>',
                                     unsafe_allow_html=True
                                 )
-
-                # --- Gap Analysis ---
-                st.markdown("---")
-                st.subheader("Gap Analysis")
-                render_gap_analysis(results, framework_summaries)
-
-                # --- Export ---
-                st.markdown("---")
-                st.subheader("Export Results")
-
-                excel_data = generate_results_excel(results, framework_summaries)
-                st.download_button(
-                    label="Download Results as Excel",
-                    data=excel_data,
-                    file_name="framework_analysis_results.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
 
             else:
                 st.info("Upload a document and click 'Analyze Report' to see results")
