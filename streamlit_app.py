@@ -1601,14 +1601,8 @@ def main():
                         file_name="framework_analysis_results.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
-                with exp_col2:
-                    if 'show_gap_analysis' not in st.session_state:
-                        st.session_state.show_gap_analysis = False
-                    if st.button("📋 Show / Hide Gap Analysis", key="toggle_gap"):
-                        st.session_state.show_gap_analysis = not st.session_state.show_gap_analysis
 
-                if st.session_state.get('show_gap_analysis', False):
-                    render_gap_analysis(results, framework_summaries)
+                render_gap_analysis(results, framework_summaries)
 
                 st.markdown("---")
 
