@@ -1212,7 +1212,7 @@ def main():
                  "linkedin_url": "https://www.linkedin.com/in/stephengoh/",
                  "bio": "...",
              },
-            },
+            
             # Add more team members here:
             # {
             #     "name": "...",
