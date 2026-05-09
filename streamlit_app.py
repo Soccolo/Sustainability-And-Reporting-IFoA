@@ -1,5 +1,5 @@
 """
-Sustainability Framework Analyzer - Streamlit App
+Sustainability Framework Analyser - Streamlit App
 Deploy to Streamlit Cloud for free public access.
 
 Uses Claude Haiku 4.5 API for intelligent report analysis
@@ -28,7 +28,7 @@ from collections import defaultdict
 
 # Page config
 st.set_page_config(
-    page_title="Sustainability Framework Analyzer",
+    page_title="Sustainability Framework Analyser",
     page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -318,154 +318,50 @@ SIMILARITY_PARENT_MAP = {
     "ESRS E1": "ESRS", "ESRS E4": "ESRS",
 }
 
-SIMILARITY_DATA = {
-    'all_metrics': """Framework 1,Framework 2,Similarity
-TCFD,TNFD,0.5839409060203112
-TCFD,PRA,0.2730686519708898
-TCFD,IFRS,0.2609125928445296
-TCFD,TPT,0.1371060654404573
-TCFD,BMA,0.23608424584381282
-TCFD,MAS,0.23776556043462319
-TCFD,ESRS,0.15567206435121042
-TCFD,OSFI,0.23439122204269683
-TCFD,SBTi,0.07999969971376235
-TNFD,PRA,0.26212777422430616
-TNFD,IFRS,0.24842039945006772
-TNFD,TPT,0.17511612896553494
-TNFD,BMA,0.2187226692920709
-TNFD,MAS,0.21794932497044403
-TNFD,ESRS,0.15590236308338765
-TNFD,OSFI,0.20535417050123214
-TNFD,SBTi,0.07007073858424241
-PRA,IFRS,0.2995363886926382
-PRA,TPT,0.23302435825268428
-PRA,BMA,0.4032735864873286
-PRA,MAS,0.3784382710369622
-PRA,ESRS,0.2269684903028034
-PRA,OSFI,0.27517913434749997
-PRA,SBTi,0.17912637955612606
-IFRS,TPT,0.2874849606305361
-IFRS,BMA,0.26682314644681243
-IFRS,MAS,0.2500543958740309
-IFRS,ESRS,0.22721959570720437
-IFRS,OSFI,0.1684209586431583
-IFRS,SBTi,0.14948693523183465
-TPT,BMA,0.21122716888785362
-TPT,MAS,0.1905254645156674
-TPT,ESRS,0.2575311665149296
-TPT,OSFI,0.21526032388210298
-TPT,SBTi,0.25215436905622485
-BMA,MAS,0.44722233104086156
-BMA,ESRS,0.22502909949008787
-BMA,OSFI,0.31030812229101473
-BMA,SBTi,0.21081559400666844
-MAS,ESRS,0.21739759569646364
-MAS,OSFI,0.3005068784481601
-MAS,SBTi,0.19532913667090396
-ESRS,OSFI,0.19031452880257607
-ESRS,SBTi,0.12993192649909902
-OSFI,SBTi,0.14086035046784673""",
-    'governance': """Framework 1,Framework 2,Similarity
-TCFD,TNFD,0.6521318356196085
-TCFD,IFRS,0.223162354901433
-TCFD,TPT,0.08889173832722008
-TCFD,BMA,0.19514061798426238
-TCFD,MAS,0.2784103788435459
-TCFD,ESRS,0.2051142305135727
-TCFD,OSFI,0.1666110996156931
-TCFD,SBTi,0.0358133009634912
-TNFD,IFRS,0.21374623167018095
-TNFD,TPT,0.07678758837282658
-TNFD,BMA,0.20086695002674154
-TNFD,MAS,0.2799379726250966
-TNFD,ESRS,0.19106648862361908
-TNFD,OSFI,0.18155286461114883
-TNFD,SBTi,0.051613214922448
-IFRS,TPT,0.2583204656839371
-IFRS,BMA,0.24816494265740568
-IFRS,MAS,0.3169849095866084
-IFRS,ESRS,0.1901303119957447
-IFRS,OSFI,0.1601065108552575
-IFRS,SBTi,0.14948693523183465
-TPT,BMA,0.21122716888785362
-TPT,MAS,0.1905254645156674
-TPT,ESRS,0.15190743803977966
-TPT,OSFI,0.21526032388210298
-TPT,SBTi,0.25215436905622485
-BMA,MAS,0.4620742628520185
-BMA,ESRS,0.338406809351661
-BMA,OSFI,0.3808234611695463
-BMA,SBTi,0.21081559400666844
-MAS,ESRS,0.30484993010759354
-MAS,OSFI,0.2966248672455549
-MAS,SBTi,0.20165940895676612
-ESRS,OSFI,0.23870150744915009
-ESRS,SBTi,0.17281209528446198
-OSFI,SBTi,0.2669262558221817""",
-    'strategy': """Framework 1,Framework 2,Similarity
-TCFD,TNFD,0.48580174272259075
-TCFD,PRA,0.23524054884910583
-TCFD,IFRS,0.2523530203435156
-TCFD,TPT,0.15317750781153638
-TCFD,ESRS,0.22506307589355856
-TNFD,PRA,0.22991521190851927
-TNFD,IFRS,0.23779052236738304
-TNFD,TPT,0.2119893316878006
-TNFD,ESRS,0.22413806741315057
-PRA,IFRS,0.2953542077292999
-PRA,TPT,0.23302435825268428
-PRA,ESRS,0.3269041081269582
-IFRS,TPT,0.2894292602936427
-IFRS,ESRS,0.2316846524370097
-TPT,ESRS,0.26413264954462645""",
-    'risk': """Framework 1,Framework 2,Similarity
-TCFD,TNFD,0.7013311435778936
-TCFD,PRA,0.28567801967815115
-TCFD,IFRS,0.35027621189753216
-TCFD,BMA,0.24609268820948071
-TCFD,MAS,0.2287333785659737
-TCFD,ESRS,0.15295727507866644
-TCFD,OSFI,0.3247647186120351
-TNFD,PRA,0.27286529499623513
-TNFD,IFRS,0.354150103405118
-TNFD,BMA,0.22363299209003648
-TNFD,MAS,0.2024521630567809
-TNFD,ESRS,0.19946823917174092
-TNFD,OSFI,0.24105612933635712
-PRA,IFRS,0.30999184110098416
-PRA,BMA,0.4032735864873286
-PRA,MAS,0.38699578797375717
-PRA,ESRS,0.25300263944599366
-PRA,OSFI,0.30415812300311196
-IFRS,BMA,0.27366448783626157
-IFRS,MAS,0.22774422463650504
-IFRS,ESRS,0.21439658903626777
-IFRS,OSFI,0.1850498542189598
-BMA,MAS,0.4454070949306091
-BMA,ESRS,0.22271955354846323
-BMA,OSFI,0.2585968737800916
-MAS,ESRS,0.23263172574634491
-MAS,OSFI,0.31769876678784686
-ESRS,OSFI,0.1823627275104324""",
-    'metrics': """Framework 1,Framework 2,Similarity
-TCFD,TNFD,0.5128121872742971
-TCFD,ESRS,0.14568644713748385
-TCFD,SBTi,0.08165462101527063
-TNFD,ESRS,0.12240990633317442
-TNFD,SBTi,0.0711076781158039
-ESRS,SBTi,0.13019893129793814""",
-    'disclosure': """Framework 1,Framework 2,Similarity
-PRA,MAS,0.3168241490920385
-PRA,ESRS,0.18805091977941202
-PRA,OSFI,0.26648543775081635
-PRA,SBTi,0.17912637955612606
-MAS,ESRS,0.18170758169235698
-MAS,OSFI,0.2907709578673045
-MAS,SBTi,0.19064004608878382
-ESRS,OSFI,0.1905417761847596
-ESRS,SBTi,0.12503772418815917
-OSFI,SBTi,0.11751481243926618"""
-}
+
+# ============================================
+# LOAD SIMILARITY DATA FROM CSV FILES
+# ============================================
+
+SIMILARITY_METRIC_TYPES = [
+    "all_metrics", "governance", "strategy", "risk", "metrics", "disclosure"
+]
+
+@st.cache_data
+def load_similarity_data():
+    """
+    Load similarity matrices from CSV files in the same directory as the app.
+    Expects files named: similarity_network_table_{metric_type}.csv
+    Each CSV should have columns: Framework 1, Framework 2, Similarity
+    Returns a dict mapping metric_type -> DataFrame.
+    """
+    import os
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    data = {}
+
+    for metric in SIMILARITY_METRIC_TYPES:
+        filename = f"similarity_network_table_{metric}.csv"
+        filepath = os.path.join(base_dir, filename)
+        try:
+            df = pd.read_csv(filepath)
+            # Ensure expected columns exist
+            if all(
+                col in df.columns
+                for col in ["Framework 1", "Framework 2", "Similarity"]
+            ):
+                data[metric] = df
+            else:
+                st.warning(
+                    f"Similarity file {filename} missing expected columns. "
+                    f"Found: {list(df.columns)}"
+                )
+        except FileNotFoundError:
+            pass  # Metric type won't be available
+        except Exception as e:
+            st.warning(f"Could not load {filename}: {e}")
+
+    return data
+
 
 
 # ============================================
@@ -827,13 +723,6 @@ def get_score_color(score):
         return "score-verylow"
 
 
-def parse_similarity_csv(csv_string):
-    """Parse similarity CSV data"""
-    from io import StringIO
-    df = pd.read_csv(StringIO(csv_string))
-    return df
-
-
 def get_similarity_for_framework(df, framework):
     """Get similarity scores for a specific framework.
     For split frameworks (e.g. IFRS S1), falls back to the parent name (IFRS) in similarity data.
@@ -1129,259 +1018,590 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
 
 
 # ============================================
+# REQUIREMENT-LEVEL DIFF FOR SIMILARITY VIEW
+# ============================================
+
+def compute_requirement_diffs(fw_a, fw_b, framework_requirements):
+    """
+    Compare requirements between two frameworks for overlapping topics.
+    Returns a list of dicts with topic, req_a, req_b, and diff HTML.
+    """
+    import difflib
+
+    reqs_a = framework_requirements.get(fw_a, {})
+    reqs_b = framework_requirements.get(fw_b, {})
+
+    # Find overlapping topic names (case-insensitive match)
+    topics_a = {t.lower(): t for t in reqs_a}
+    topics_b = {t.lower(): t for t in reqs_b}
+    common_topics = set(topics_a.keys()) & set(topics_b.keys())
+
+    comparisons = []
+    for topic_key in sorted(common_topics):
+        topic_a = topics_a[topic_key]
+        topic_b = topics_b[topic_key]
+        list_a = reqs_a[topic_a]
+        list_b = reqs_b[topic_b]
+
+        # Pair requirements by position (zip to shorter list)
+        for i in range(max(len(list_a), len(list_b))):
+            req_a_text = list_a[i] if i < len(list_a) else None
+            req_b_text = list_b[i] if i < len(list_b) else None
+            comparisons.append({
+                "topic": topic_a,
+                "req_a": req_a_text,
+                "req_b": req_b_text,
+            })
+
+    return comparisons
+
+
+def render_diff_html(text_a, text_b):
+    """Generate HTML showing word-level differences between two texts."""
+    import difflib
+
+    if text_a is None:
+        return f'<span style="color:#888;font-style:italic;">—</span>', f'<span>{text_b}</span>'
+    if text_b is None:
+        return f'<span>{text_a}</span>', f'<span style="color:#888;font-style:italic;">—</span>'
+
+    words_a = text_a.split()
+    words_b = text_b.split()
+    sm = difflib.SequenceMatcher(None, words_a, words_b)
+
+    html_a_parts = []
+    html_b_parts = []
+
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == 'equal':
+            html_a_parts.append(" ".join(words_a[i1:i2]))
+            html_b_parts.append(" ".join(words_b[j1:j2]))
+        elif op == 'replace':
+            html_a_parts.append(
+                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'{" ".join(words_a[i1:i2])}</span>'
+            )
+            html_b_parts.append(
+                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'{" ".join(words_b[j1:j2])}</span>'
+            )
+        elif op == 'delete':
+            html_a_parts.append(
+                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'{" ".join(words_a[i1:i2])}</span>'
+            )
+        elif op == 'insert':
+            html_b_parts.append(
+                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'{" ".join(words_b[j1:j2])}</span>'
+            )
+
+    return " ".join(html_a_parts), " ".join(html_b_parts)
+
+
+# ============================================
 # MAIN APP
 # ============================================
 
+
 def main():
-    st.title("Sustainability Framework Analyzer")
-    st.markdown("Compare & analyze ESG reporting frameworks")
+    st.title("Sustainability Framework Analyser")
+    st.markdown("Compare & analyse ESG reporting frameworks")
 
     # Load requirements from Excel once
     framework_requirements = load_framework_requirements()
 
-    tab1, tab2, tab3 = st.tabs(["Framework Map", "Report Analyzer", "Side-by-Side Comparison"])
+    # Load similarity CSVs
+    similarity_data = load_similarity_data()
+
+    tab0, tab1, tab2, tab3 = st.tabs([
+        "Welcome", "Framework Map", "Report Analyser", "Side-by-Side Comparison"
+    ])
+
+    # ============================================
+    # TAB 0: WELCOME / INTRODUCTION
+    # ============================================
+    with tab0:
+        st.header("Welcome to the Sustainability Framework Analyser")
+        st.markdown(
+            "This tool was built by the **IFoA Sustainability and Reporting Working Party** "
+            "to help actuaries and sustainability professionals navigate the growing landscape "
+            "of climate and ESG reporting frameworks."
+        )
+
+        st.markdown("### What you can do")
+        st.markdown(
+            "**Framework Map** — Explore how sustainability frameworks are adopted globally. "
+            "Select a framework to see which countries have adopted it, and compare its similarity "
+            "to other frameworks across governance, strategy, risk, metrics, and disclosure dimensions."
+        )
+        st.markdown(
+            "**Report Analyser** — Upload a transition plan or ESG report (PDF) and have it "
+            "assessed requirement-by-requirement against the frameworks you choose. The tool uses "
+            "Claude AI to classify each requirement as *Covered*, *Partly covered*, or *Not covered*, "
+            "with rationale and relevant extracts from your document."
+        )
+        st.markdown(
+            "**Side-by-Side Comparison** — Upload two reports to benchmark them against each other. "
+            "Useful for comparing year-on-year progress or two firms' disclosures."
+        )
+
+        st.markdown("### How to use the Report Analyser")
+        st.markdown(
+            "1. Go to the **Report Analyser** tab.\n"
+            "2. Enter your Anthropic API key (get one free at "
+            "[console.anthropic.com](https://console.anthropic.com)).\n"
+            "3. Select the frameworks you want to assess against.\n"
+            "4. Upload your PDF and optionally select a page range.\n"
+            "5. Click **Analyse Report** and wait for results.\n"
+            "6. Review the detailed analysis, gap analysis, and download the Excel export."
+        )
+
+        st.markdown("---")
+        st.markdown("### The Team")
+
+        # ── Team profiles ──
+        # Edit the list below to add/remove members.
+        team_members = [
+            {
+                "name": "Lloyd Richards",
+                "title": "Director & Head of Actuarial",
+                "organisation": "Crowe UK",
+                "linkedin_url": "https://www.linkedin.com/in/lloydrichards/",
+                "bio": "Lead of the IFoA Sustainability and Reporting Working Party.",
+            },
+            {
+                "name": "Cristian-Anton Calin",
+                "title": "Pricing Actuary",
+                "organisation": "Zurich Insurance",
+                "linkedin_url": "https://linkedin.com/in/cristian-calin-b4969b1b2",
+                "bio": "App Technical Developer.",
+            }
+            {
+                 "name": "Charchit Agrawal",
+                 "title": "Associate Director",
+                 "organisation": "BDO",
+                 "linkedin_url": "https://www.linkedin.com/in/charchit-agrawal-ba2a334/",
+                 "bio": "...",
+                },
+            {
+                 "name": "Diksha Thawani",
+                 "title": "Student Actuary",
+                 "organisation": "Zurich Kotak General Insurance",
+                 "linkedin_url": "https://www.linkedin.com/in/diksha-thawani/",
+                 "bio": "...",
+             },
+            {
+                 "name": "Ella Reid-Norris",
+                 "title": "Actuary, economist and strategist",
+                 "organisation": "Fair4All Finance",
+                 "linkedin_url": "https://www.linkedin.com/in/ella-reid-norris/",
+                 "bio": "...",
+             },
+            {
+                 "name": "Festus Cheruiyot",
+                 "title": "Actuarial Student",
+                 "organisation": "ACTEX Learning",
+                 "linkedin_url": "https://www.linkedin.com/in/festus-cheruiyot/",
+                 "bio": "...",
+             },
+            {
+                 "name": "Stephen Goh",
+                 "title": "Actuarial Consultant",
+                 "organisation": "Milliman UK",
+                 "linkedin_url": "https://www.linkedin.com/in/stephengoh/",
+                 "bio": "...",
+             },
+            },
+            # Add more team members here:
+            # {
+            #     "name": "...",
+            #     "title": "...",
+            #     "organisation": "...",
+            #     "linkedin_url": "https://linkedin.com/in/...",
+            #     "bio": "...",
+            # },
+        ]
+
+        cols_per_row = 3
+        for row_start in range(0, len(team_members), cols_per_row):
+            row_members = team_members[row_start:row_start + cols_per_row]
+            profile_cols = st.columns(cols_per_row)
+            for idx, member in enumerate(row_members):
+                with profile_cols[idx]:
+                    org_line = ""
+                    if member["organisation"]:
+                        org_line = (
+                            '<p style="margin:0 0 8px 0;font-size:12px;'
+                            f'color:#888;">{member["organisation"]}</p>'
+                        )
+                    st.markdown(
+                        f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                        f'border-radius:10px;padding:20px;min-height:180px;">'
+                        f'<p style="margin:0;font-size:17px;font-weight:700;'
+                        f'color:#1a1a1a;">{member["name"]}</p>'
+                        f'<p style="margin:2px 0 4px 0;font-size:13px;'
+                        f'color:#d97706;font-weight:600;">{member["title"]}</p>'
+                        f'{org_line}'
+                        f'<p style="margin:0 0 10px 0;font-size:13px;'
+                        f'color:#555;">{member["bio"]}</p>'
+                        f'<a href="{member["linkedin_url"]}" target="_blank" '
+                        f'style="font-size:13px;color:#2563eb;text-decoration:none;">'
+                        f'LinkedIn &rarr;</a>'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
     # ============================================
     # TAB 1: FRAMEWORK MAP
     # ============================================
     with tab1:
         st.header("Climate & Sustainability Framework Adoption")
-        st.markdown("Interactive map showing global adoption of regulatory frameworks")
+        st.markdown(
+            "Explore global adoption and compare similarity between "
+            "regulatory frameworks"
+        )
 
-        col1, col2 = st.columns([1, 3])
+        # --- Controls ---
+        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([1, 1, 2])
 
-        with col1:
-            # Metric selector
-            metric_type = st.selectbox(
-                "Select Metric Type",
-                options=["all_metrics", "governance", "strategy", "risk", "metrics", "disclosure"],
-                format_func=lambda x: x.replace("_", " ").title()
-            )
-
-            # Framework selector
+        with ctrl_col1:
             framework_options = ["ALL"] + list(FRAMEWORK_COLORS.keys())
             selected_framework = st.selectbox(
                 "Select Framework",
-                options=framework_options
+                options=framework_options,
+                help=(
+                    "Choose a framework to see its similarity to others, "
+                    "or ALL for the full map"
+                )
             )
 
-            # Legend
-            st.markdown("### Framework Legend")
+        with ctrl_col2:
+            available_metrics = (
+                list(similarity_data.keys())
+                if similarity_data
+                else SIMILARITY_METRIC_TYPES
+            )
+            metric_type = st.selectbox(
+                "Select Metric Type",
+                options=available_metrics,
+                format_func=lambda x: x.replace("_", " ").title(),
+                help="Filter similarity scores by topic area"
+            )
+
+        # --- Main content: Similarity table (prominent) + Legend ---
+        content_col, legend_col = st.columns([3, 1])
+
+        with legend_col:
+            st.markdown("#### Framework Legend")
             for fw, color in FRAMEWORK_COLORS.items():
+                full_name = FRAMEWORK_FULL_NAMES.get(fw, fw)
                 count = len(ADOPTION_DICT.get(fw, []))
                 st.markdown(
-                    f'<div style="display:flex;align-items:center;gap:8px;margin:4px 0;">'
-                    f'<div style="width:16px;height:16px;background:{color};border-radius:4px;"></div>'
-                    f'<span style="color:#1a1a1a;">{fw}</span>'
-                    f'<span style="color:#888888;">({count} countries)</span>'
+                    f'<div style="display:flex;align-items:center;gap:8px;'
+                    f'margin:4px 0;" title="{full_name}">'
+                    f'<div style="width:14px;height:14px;background:{color};'
+                    f'border-radius:3px;flex-shrink:0;"></div>'
+                    f'<span style="color:#1a1a1a;font-size:13px;">{fw}</span>'
+                    f'<span style="color:#888888;font-size:12px;">({count})</span>'
                     f'</div>',
                     unsafe_allow_html=True
                 )
 
-        with col2:
-            # Create map data
-            map_data = []
-
+        with content_col:
             if selected_framework == "ALL":
-                all_countries = set()
-                for countries in ADOPTION_DICT.values():
-                    all_countries.update(countries)
-
-                for country in all_countries:
-                    if country in COUNTRY_COORDS:
-                        frameworks = [fw for fw, countries in ADOPTION_DICT.items() if country in countries]
-                        map_data.append({
-                            "country": country,
-                            "lat": COUNTRY_COORDS[country]["lat"],
-                            "lon": COUNTRY_COORDS[country]["lon"],
-                            "frameworks": len(frameworks),
-                            "framework_list": ", ".join(frameworks),
-                            "size": 10 + len(frameworks) * 3
-                        })
+                st.markdown(
+                    '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                    'border-radius:8px;padding:40px;text-align:center;'
+                    'margin:16px 0;">'
+                    '<p style="color:#555;font-size:15px;margin:0;">'
+                    '&#x1F446; Select a framework from the dropdown above to '
+                    'explore its similarity to other frameworks.</p>'
+                    '</div>',
+                    unsafe_allow_html=True
+                )
             else:
-                countries = ADOPTION_DICT.get(selected_framework, [])
-                for country in countries:
-                    if country in COUNTRY_COORDS:
-                        map_data.append({
-                            "country": country,
-                            "lat": COUNTRY_COORDS[country]["lat"],
-                            "lon": COUNTRY_COORDS[country]["lon"],
-                            "frameworks": 1,
-                            "framework_list": selected_framework,
-                            "size": 15
-                        })
-
-            if map_data:
-                df_map = pd.DataFrame(map_data)
-
-                fig = px.scatter_geo(
-                    df_map,
-                    lat="lat",
-                    lon="lon",
-                    hover_name="country",
-                    hover_data={"framework_list": True, "lat": False, "lon": False, "frameworks": False, "size": False},
-                    size="size",
-                    color="frameworks" if selected_framework == "ALL" else None,
-                    color_continuous_scale="Viridis" if selected_framework == "ALL" else None,
-                    projection="orthographic"
+                st.markdown(
+                    f"#### Framework Similarity: {selected_framework}"
+                )
+                st.markdown(
+                    f"*{FRAMEWORK_FULL_NAMES.get(selected_framework, selected_framework)}"
+                    f" · Metric: {metric_type.replace('_', ' ').title()}*"
                 )
 
-                if selected_framework != "ALL":
-                    fig.update_traces(marker=dict(color=FRAMEWORK_COLORS.get(selected_framework, "#888")))
-
-                # Build rotation animation frames (full 360° spin)
-                n_frames = 36
-                frames = []
-                for i in range(n_frames):
-                    lon_rot = -20 + (360 / n_frames) * i
-                    frames.append(go.Frame(
-                        layout=dict(geo=dict(projection_rotation=dict(lon=lon_rot, lat=15))),
-                        name=str(i)
-                    ))
-                fig.frames = frames
-
-                fig.update_layout(
-                    geo=dict(
-                        showland=True,
-                        landcolor="#d4e8d0",
-                        showocean=True,
-                        oceancolor="#daeaf6",
-                        showcoastlines=True,
-                        coastlinecolor="#aaaaaa",
-                        showcountries=True,
-                        countrycolor="#cccccc",
-                        showframe=False,
-                        bgcolor="#ffffff",
-                        projection_rotation=dict(lon=-20, lat=15),
-                    ),
-                    paper_bgcolor="#ffffff",
-                    plot_bgcolor="#ffffff",
-                    font=dict(color="#1a1a1a"),
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=560,
-                    # Play/pause button and slider for the spin
-                    updatemenus=[dict(
-                        type="buttons",
-                        showactive=False,
-                        x=0.02, y=0.02,
-                        xanchor="left", yanchor="bottom",
-                        buttons=[
-                            dict(
-                                label="▶ Spin",
-                                method="animate",
-                                args=[None, dict(
-                                    frame=dict(duration=120, redraw=True),
-                                    fromcurrent=True,
-                                    transition=dict(duration=80),
-                                    mode="immediate",
-                                )],
-                            ),
-                            dict(
-                                label="⏸ Stop",
-                                method="animate",
-                                args=[[None], dict(
-                                    frame=dict(duration=0, redraw=False),
-                                    mode="immediate",
-                                    transition=dict(duration=0),
-                                )],
-                            ),
-                        ],
-                    )],
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-
-            # Similarity table
-            if selected_framework != "ALL":
-                st.markdown(f"### Framework Similarity: {selected_framework}")
-                st.markdown(f"*Metric: {metric_type.replace('_', ' ').title()}*")
-
-                df_sim = parse_similarity_csv(SIMILARITY_DATA[metric_type])
-                similarities = get_similarity_for_framework(df_sim, selected_framework)
+                df_sim = similarity_data.get(metric_type)
+                if df_sim is None:
+                    st.info(
+                        f"No similarity data available for "
+                        f"{metric_type.replace('_', ' ').title()}. "
+                        f"Check that the CSV file is present in the repository."
+                    )
+                    similarities = []
+                else:
+                    similarities = get_similarity_for_framework(
+                        df_sim, selected_framework
+                    )
 
                 if similarities:
                     for item in similarities:
                         score = item['similarity']
                         pct = score * 100
-                        color = "#16a34a" if score >= 0.4 else "#2563eb" if score >= 0.3 else "#d97706" if score >= 0.2 else "#dc2626"
+                        other_fw = item['framework']
+                        color = (
+                            "#16a34a" if score >= 0.4
+                            else "#2563eb" if score >= 0.3
+                            else "#d97706" if score >= 0.2
+                            else "#dc2626"
+                        )
+                        fw_color = FRAMEWORK_COLORS.get(other_fw, "#888888")
+                        other_full = FRAMEWORK_FULL_NAMES.get(other_fw, other_fw)
 
                         st.markdown(
-                            f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;">'
-                            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                            f'<div style="background:#f5f5f5;padding:12px;'
+                            f'border-radius:8px;margin:8px 0;">'
+                            f'<div style="display:flex;justify-content:space-between;'
+                            f'align-items:center;">'
                             f'<div style="display:flex;align-items:center;gap:8px;">'
-                            f'<div style="width:16px;height:16px;background:{FRAMEWORK_COLORS.get(item["framework"], "#888888")};border-radius:4px;"></div>'
-                            f'<span style="font-weight:600;color:#1a1a1a;">{item["framework"]}</span>'
+                            f'<div style="width:14px;height:14px;background:{fw_color};'
+                            f'border-radius:3px;"></div>'
+                            f'<span style="font-weight:600;color:#1a1a1a;" '
+                            f'title="{other_full}">{other_fw}</span>'
                             f'</div>'
-                            f'<span style="color:{color};font-weight:700;font-family:monospace;">{pct:.1f}%</span>'
+                            f'<span style="color:{color};font-weight:700;'
+                            f'font-family:monospace;">{pct:.1f}%</span>'
                             f'</div>'
-                            f'<div style="background:#e0e0e0;border-radius:4px;height:8px;margin-top:8px;overflow:hidden;">'
-                            f'<div style="background:{color};height:100%;width:{pct}%;"></div>'
+                            f'<div style="background:#e0e0e0;border-radius:4px;'
+                            f'height:8px;margin-top:8px;overflow:hidden;">'
+                            f'<div style="background:{color};height:100%;'
+                            f'width:{pct}%;"></div>'
                             f'</div>'
                             f'</div>',
                             unsafe_allow_html=True
                         )
-                else:
-                    st.info(f"No similarity data available for {selected_framework} under {metric_type}")
 
-        # About section
-        with st.expander("About the Frameworks"):
-            for fw, name in FRAMEWORK_FULL_NAMES.items():
-                st.markdown(f"**{fw}** - {name}")
+                        # Expandable requirement-level comparison
+                        comparisons = compute_requirement_diffs(
+                            selected_framework, other_fw, framework_requirements
+                        )
+                        if comparisons:
+                            with st.expander(
+                                f"View requirement-level comparison: "
+                                f"{selected_framework} vs {other_fw} "
+                                f"({len(comparisons)} requirement pairs)"
+                            ):
+                                current_topic = None
+                                for comp in comparisons:
+                                    if comp["topic"] != current_topic:
+                                        current_topic = comp["topic"]
+                                        st.markdown(f"**{current_topic}**")
+
+                                    html_a, html_b = render_diff_html(
+                                        comp["req_a"], comp["req_b"]
+                                    )
+
+                                    fw_sel_color = FRAMEWORK_COLORS.get(
+                                        selected_framework, "#888"
+                                    )
+                                    st.markdown(
+                                        f'<div style="display:flex;gap:12px;'
+                                        f'margin:6px 0;font-size:12px;'
+                                        f'line-height:1.5;">'
+                                        f'<div style="flex:1;background:#f0f7ff;'
+                                        f'padding:8px;border-radius:6px;'
+                                        f'border-left:3px solid {fw_sel_color};">'
+                                        f'<strong style="color:#1a1a1a;">'
+                                        f'{selected_framework}</strong>'
+                                        f'<br><span style="color:#333;">'
+                                        f'{html_a}</span></div>'
+                                        f'<div style="flex:1;background:#f0fff4;'
+                                        f'padding:8px;border-radius:6px;'
+                                        f'border-left:3px solid {fw_color};">'
+                                        f'<strong style="color:#1a1a1a;">'
+                                        f'{other_fw}</strong>'
+                                        f'<br><span style="color:#333;">'
+                                        f'{html_b}</span></div>'
+                                        f'</div>',
+                                        unsafe_allow_html=True
+                                    )
+                else:
+                    st.info(
+                        f"No similarity data available for "
+                        f"{selected_framework} under "
+                        f"{metric_type.replace('_', ' ').title()}"
+                    )
+
+        # --- Globe map below ---
+        st.markdown("---")
+        st.markdown("#### Global Adoption Map")
+
+        map_data = []
+        if selected_framework == "ALL":
+            all_countries = set()
+            for countries_list in ADOPTION_DICT.values():
+                all_countries.update(countries_list)
+            for country in all_countries:
+                if country in COUNTRY_COORDS:
+                    fws = [
+                        fw for fw, ctrs in ADOPTION_DICT.items()
+                        if country in ctrs
+                    ]
+                    map_data.append({
+                        "country": country,
+                        "lat": COUNTRY_COORDS[country]["lat"],
+                        "lon": COUNTRY_COORDS[country]["lon"],
+                        "frameworks": len(fws),
+                        "framework_list": ", ".join(fws),
+                        "size": 10 + len(fws) * 3
+                    })
+        else:
+            for country in ADOPTION_DICT.get(selected_framework, []):
+                if country in COUNTRY_COORDS:
+                    map_data.append({
+                        "country": country,
+                        "lat": COUNTRY_COORDS[country]["lat"],
+                        "lon": COUNTRY_COORDS[country]["lon"],
+                        "frameworks": 1,
+                        "framework_list": selected_framework,
+                        "size": 15
+                    })
+
+        if map_data:
+            df_map = pd.DataFrame(map_data)
+            fig = px.scatter_geo(
+                df_map, lat="lat", lon="lon",
+                hover_name="country",
+                hover_data={
+                    "framework_list": True, "lat": False,
+                    "lon": False, "frameworks": False, "size": False
+                },
+                size="size",
+                color="frameworks" if selected_framework == "ALL" else None,
+                color_continuous_scale=(
+                    "Viridis" if selected_framework == "ALL" else None
+                ),
+                projection="orthographic"
+            )
+
+            if selected_framework != "ALL":
+                fig.update_traces(marker=dict(
+                    color=FRAMEWORK_COLORS.get(selected_framework, "#888")
+                ))
+
+            n_frames = 36
+            frames = []
+            for i in range(n_frames):
+                lon_rot = -20 + (360 / n_frames) * i
+                frames.append(go.Frame(
+                    layout=dict(
+                        geo=dict(projection_rotation=dict(lon=lon_rot, lat=15))
+                    ),
+                    name=str(i)
+                ))
+            fig.frames = frames
+
+            fig.update_layout(
+                geo=dict(
+                    showland=True, landcolor="#d4e8d0",
+                    showocean=True, oceancolor="#daeaf6",
+                    showcoastlines=True, coastlinecolor="#aaaaaa",
+                    showcountries=True, countrycolor="#cccccc",
+                    showframe=False, bgcolor="#ffffff",
+                    projection_rotation=dict(lon=-20, lat=15),
+                ),
+                paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+                font=dict(color="#1a1a1a"),
+                margin=dict(l=0, r=0, t=0, b=0), height=500,
+                updatemenus=[dict(
+                    type="buttons", showactive=False,
+                    x=0.02, y=0.02, xanchor="left", yanchor="bottom",
+                    buttons=[
+                        dict(
+                            label="\u25b6 Spin", method="animate",
+                            args=[None, dict(
+                                frame=dict(duration=120, redraw=True),
+                                fromcurrent=True,
+                                transition=dict(duration=80),
+                                mode="immediate",
+                            )],
+                        ),
+                        dict(
+                            label="\u23f8 Stop", method="animate",
+                            args=[[None], dict(
+                                frame=dict(duration=0, redraw=False),
+                                mode="immediate",
+                                transition=dict(duration=0),
+                            )],
+                        ),
+                    ],
+                )],
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
     # ============================================
-    # TAB 2: REPORT ANALYZER
+    # TAB 2: REPORT ANALYSER (single-column)
     # ============================================
     with tab2:
-        st.header("ESG Report Comparison Tool")
+        st.header("ESG Report Analyser")
         st.markdown(
-            "Upload your transition plan or ESG report PDF to analyze how well it aligns with sustainability frameworks. "
-            "Uses **Claude Haiku 4.5** to classify your report requirement-by-requirement (falls back to **Sonnet 4** for "
-            "large documents) — finding relevant text across the full document, classifying coverage, and providing a rationale for each."
+            "Upload your transition plan or ESG report PDF to analyse how "
+            "well it aligns with sustainability frameworks. Uses "
+            "**Claude Haiku 4.5** to classify your report "
+            "requirement-by-requirement (falls back to **Sonnet 4** for "
+            "large documents) \u2014 finding relevant text across the full "
+            "document, classifying coverage, and providing a rationale "
+            "for each."
         )
 
-        # API key input
-        api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
-            placeholder="sk-ant-...",
-            help="Required for analysis. Your key is not stored. Get one at console.anthropic.com"
-        )
+        # --- All controls on one row ---
+        st.markdown("---")
+        api_col, upload_col = st.columns([1, 1])
 
-        col1, col2 = st.columns([1, 1])
+        with api_col:
+            api_key = st.text_input(
+                "Anthropic API Key", type="password",
+                placeholder="sk-ant-...",
+                help=(
+                    "Required for analysis. Your key is not stored. "
+                    "Get one at console.anthropic.com"
+                )
+            )
 
-        with col1:
-            # Framework selection
-            st.subheader("Select Frameworks")
-            st.markdown("*Tip: Select fewer frameworks for faster analysis*")
+            st.markdown("**Select Frameworks**")
+            available_frameworks = (
+                list(framework_requirements.keys())
+                if framework_requirements
+                else list(FRAMEWORK_COLORS.keys())
+            )
 
-            # Use frameworks available in the loaded Excel
-            available_frameworks = list(framework_requirements.keys()) if framework_requirements else list(FRAMEWORK_COLORS.keys())
-
-            col_sel1, col_sel2 = st.columns(2)
-            with col_sel1:
+            btn_col1, btn_col2 = st.columns(2)
+            with btn_col1:
                 if st.button("Select All"):
-                    st.session_state.selected_frameworks = available_frameworks.copy()
-            with col_sel2:
+                    st.session_state.selected_frameworks = (
+                        available_frameworks.copy()
+                    )
+            with btn_col2:
                 if st.button("Clear All"):
                     st.session_state.selected_frameworks = []
 
-            # Initialize session state
             if 'selected_frameworks' not in st.session_state:
                 st.session_state.selected_frameworks = ["TCFD", "TNFD"]
 
-            # Framework checkboxes
             selected_frameworks = []
-            cols = st.columns(2)
+            fw_cols = st.columns(3)
             for i, fw in enumerate(available_frameworks):
-                color = FRAMEWORK_COLORS.get(fw, "#888888")
-                with cols[i % 2]:
-                    # Count requirements for this framework
-                    req_count = sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+                with fw_cols[i % 3]:
+                    req_count = sum(
+                        len(reqs)
+                        for reqs in framework_requirements.get(fw, {}).values()
+                    )
                     checked = st.checkbox(
                         f"{fw}",
                         value=fw in st.session_state.selected_frameworks,
                         key=f"fw_{fw}",
-                        help=f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} ({req_count} requirements)"
+                        help=(
+                            f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} "
+                            f"({req_count} requirements)"
+                        )
                     )
                     if checked:
                         selected_frameworks.append(fw)
@@ -1389,33 +1609,43 @@ def main():
             st.session_state.selected_frameworks = selected_frameworks
 
             total_reqs = sum(
-                sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+                sum(
+                    len(reqs)
+                    for reqs in framework_requirements.get(fw, {}).values()
+                )
                 for fw in selected_frameworks
             )
-            st.markdown(f"**{len(selected_frameworks)}** framework(s) selected · **{total_reqs}** requirements")
+            st.markdown(
+                f"**{len(selected_frameworks)}** framework(s) selected "
+                f"\u00b7 **{total_reqs}** requirements"
+            )
             if selected_frameworks:
-                st.markdown(f"*Estimated time: ~{len(selected_frameworks) * 8} seconds (1 API call per framework)*")
+                st.markdown(
+                    f"*Estimated time: "
+                    f"~{len(selected_frameworks) * 8} seconds "
+                    f"(1 API call per framework)*"
+                )
 
-            # File upload
-            st.subheader("Upload Document")
+        with upload_col:
+            st.markdown("**Upload Document**")
             uploaded_file = st.file_uploader(
-                "Choose a PDF file",
-                type="pdf",
+                "Choose a PDF file", type="pdf",
                 help="Upload your ESG report or transition plan PDF"
             )
 
-            # Page range selection (only shown when a PDF is uploaded)
             page_start = 1
             page_end = None
             if uploaded_file:
-                # Peek at total page count without consuming the file
                 import pymupdf
                 pdf_bytes = uploaded_file.read()
-                uploaded_file.seek(0)  # reset so it can be read again later
+                uploaded_file.seek(0)
                 with pymupdf.open(stream=pdf_bytes, filetype="pdf") as doc:
                     total_pages = len(doc)
 
-                st.markdown(f"**PDF has {total_pages} pages.** Select the range to analyse:")
+                st.markdown(
+                    f"**PDF has {total_pages} pages.** "
+                    f"Select the range to analyse:"
+                )
                 pr_col1, pr_col2 = st.columns(2)
                 with pr_col1:
                     page_start = st.number_input(
@@ -1428,260 +1658,331 @@ def main():
                         value=total_pages, step=1, key="page_end"
                     )
                 if page_start > page_end:
-                    st.warning("'From page' must be ≤ 'To page'.")
+                    st.warning("'From page' must be \u2264 'To page'.")
 
-            # Or paste text
             st.markdown("**Or paste text:**")
             pasted_text = st.text_area(
-                "Paste your report text here",
-                height=150,
+                "Paste your report text here", height=120,
                 placeholder="Paste your ESG report content..."
             )
 
-            # Analyze button
-            analyze_disabled = (not uploaded_file and not pasted_text) or len(selected_frameworks) == 0 or not api_key
+        # Analyse button (full width)
+        analyse_disabled = (
+            (not uploaded_file and not pasted_text)
+            or len(selected_frameworks) == 0
+            or not api_key
+        )
 
-            if st.button("Analyze Report", disabled=analyze_disabled, type="primary"):
-                if not api_key:
-                    st.error("Please enter your Anthropic API key")
-                elif len(selected_frameworks) == 0:
-                    st.error("Please select at least one framework")
-                elif not uploaded_file and not pasted_text:
-                    st.error("Please upload a PDF or paste text")
-                else:
-                    # Extract text
-                    if uploaded_file:
-                        # Validate page range
-                        if page_end is not None and page_start > page_end:
-                            st.error("'From page' must be ≤ 'To page'.")
-                            st.stop()
-
-                        with st.spinner("Extracting text from PDF..."):
-                            try:
-                                text_list = extract_text_from_pdf(uploaded_file)
-                                total = len(text_list)
-                                # Apply page range (convert 1-indexed to 0-indexed)
-                                start_idx = max(0, page_start - 1)
-                                end_idx = page_end if page_end is not None else total
-                                text_list = text_list[start_idx:end_idx]
-                                st.success(
-                                    f"Analysing pages {page_start}–{end_idx} "
-                                    f"({len(text_list)} of {total} pages)"
-                                )
-                            except Exception as e:
-                                st.error(f"Failed to extract PDF: {e}")
-                                st.stop()
-                    else:
-                        text_list = [p.strip().replace('\n', ' ') for p in pasted_text.split('\n\n') if p.strip()]
-                        st.info(f"Processing {len(text_list)} paragraphs")
-
-                    # Combine all pages into single report text for Claude
-                    report_text = "\n\n".join(text_list)
-
-                    # Run analysis
-                    st.markdown("### Analyzing with Claude...")
-                    progress_bar = st.progress(0)
-
-                    try:
-                        results, framework_summaries, token_usage = claude_analyze_report(
-                            report_text,
-                            selected_frameworks,
-                            api_key,
-                            framework_requirements,
-                            progress_bar
-                        )
-
-                        # Store results in session state
-                        st.session_state.analysis_results = results
-                        st.session_state.framework_summaries = framework_summaries
-                        st.session_state.num_pages = len(text_list)
-                        st.session_state.token_usage = token_usage
-
-                        st.success("Analysis complete!")
-                    except anthropic.AuthenticationError:
-                        st.error("Invalid API key. Please check your Anthropic API key.")
-                    except Exception as e:
-                        st.error(f"Analysis failed: {e}")
-
-        with col2:
-            st.subheader("Results")
-
-            if 'analysis_results' in st.session_state and st.session_state.analysis_results:
-                results = st.session_state.analysis_results
-                framework_summaries = st.session_state.framework_summaries
-                num_pages = st.session_state.num_pages
-                token_usage = st.session_state.get('token_usage', {})
-
-                # Overall summary
-                total_results = len(results)
-                covers_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_COVERS)
-                partly_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_PARTLY)
-                doesnt_count = sum(1 for r in results if r['classification'] == CLASSIFICATION_DOESNT)
-
-                # Find best framework
-                best_fw = max(framework_summaries.items(), key=lambda x: x[1]['avg_score']) if framework_summaries else None
-
-                summary_html = (
-                    f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:16px;margin-bottom:16px;">'
-                    f'<h4 style="margin:0 0 12px 0;color:#1a1a1a;">Analysis Summary</h4>'
-                    f'<p style="margin:0 0 8px 0;color:#333333;">Analyzed <strong>{num_pages}</strong> pages against '
-                    f'<strong>{len(framework_summaries)}</strong> frameworks '
-                    f'({total_results} requirements total).</p>'
-                    f'<div style="display:flex;gap:12px;flex-wrap:wrap;margin:8px 0;">'
-                    f'<span class="badge-covers">{covers_count} Covers</span>'
-                    f'<span class="badge-partly">{partly_count} Partly covers</span>'
-                    f'<span class="badge-doesnt">{doesnt_count} Doesn\'t cover</span>'
-                    f'</div>'
-                )
-                if best_fw:
-                    summary_html += (
-                        f'<p style="margin:8px 0 0 0;color:#333333;">Best alignment with '
-                        f'<strong>{best_fw[0]}</strong>.</p>'
-                    )
-                summary_html += '</div>'
-                st.markdown(summary_html, unsafe_allow_html=True)
-
-                # Cost estimate
-                if token_usage:
-                    # Cost depends on which models were used
-                    # Haiku: $1/$5 per MTok input/output; Sonnet: $3/$15 per MTok
-                    models_used = token_usage.get('models_used', set())
-                    used_sonnet = "claude-sonnet-4-20250514" in models_used
-                    used_haiku = "claude-haiku-4-5-20251001" in models_used
-
-                    # Conservative estimate: if both models used, use blended upper bound
-                    if used_sonnet and used_haiku:
-                        model_label = "Haiku 4.5 + Sonnet 4 (fallback)"
-                        # Use Sonnet pricing as upper bound since we can't split per-model
-                        input_rate, output_rate = 3.0, 15.0
-                    elif used_sonnet:
-                        model_label = "Sonnet 4 (fallback)"
-                        input_rate, output_rate = 3.0, 15.0
-                    else:
-                        model_label = "Haiku 4.5"
-                        input_rate, output_rate = 1.0, 5.0
-
-                    input_cost = token_usage.get('input_tokens', 0) / 1_000_000 * input_rate
-                    output_cost = token_usage.get('output_tokens', 0) / 1_000_000 * output_rate
-                    cache_reads = token_usage.get('cache_read_tokens', 0)
-                    cache_savings = cache_reads / 1_000_000 * (input_rate * 0.9)
-                    total_cost = input_cost + output_cost
-
-                    model_note = ""
-                    if used_sonnet and used_haiku:
-                        model_note = (
-                            "<br><em style='font-size:12px;color:#d97706;'>"
-                            "⚠ Haiku hit rate limits — some frameworks analysed with Sonnet. "
-                            "Cost shown is upper-bound estimate.</em>"
-                        )
-                    elif used_sonnet:
-                        model_note = (
-                            "<br><em style='font-size:12px;color:#d97706;'>"
-                            "⚠ Haiku rate-limited — all frameworks analysed with Sonnet.</em>"
-                        )
-
-                    st.markdown(
-                        f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;padding:12px;margin-bottom:16px;font-size:13px;color:#333333;">'
-                        f'<strong>Model:</strong> {model_label} · '
-                        f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
-                        f'({token_usage.get("input_tokens", 0):,} input / {token_usage.get("output_tokens", 0):,} output tokens) '
-                        f'{"· Cache saved ~$" + f"{cache_savings:.4f}" if cache_reads > 0 else ""}'
-                        f'{model_note}'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-
-                # --- Export + Gap Analysis (above detailed results for visibility) ---
-                exp_col1, exp_col2 = st.columns([1, 1])
-                with exp_col1:
-                    excel_data = generate_results_excel(results, framework_summaries)
-                    st.download_button(
-                        label="📥 Download Results as Excel",
-                        data=excel_data,
-                        file_name="framework_analysis_results.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-
-                render_gap_analysis(results, framework_summaries)
-
-                st.markdown("---")
-
-                # Results by framework
-                for framework in st.session_state.selected_frameworks:
-                    fw_results = [r for r in results if r['framework'] == framework]
-                    if not fw_results:
-                        continue
-
-                    summary = framework_summaries.get(framework, {})
-                    counts = summary.get("counts", {})
-                    c_count = counts.get(CLASSIFICATION_COVERS, 0)
-                    p_count = counts.get(CLASSIFICATION_PARTLY, 0)
-                    d_count = counts.get(CLASSIFICATION_DOESNT, 0)
-
-                    with st.expander(
-                        f"**{framework}** — {c_count} cover · {p_count} partly · {d_count} don't cover",
-                        expanded=True
-                    ):
-                        # Group results by topic
-                        topics_seen = []
-                        for r in fw_results:
-                            if r["topic"] not in topics_seen:
-                                topics_seen.append(r["topic"])
-
-                        for topic in topics_seen:
-                            topic_results = [r for r in fw_results if r["topic"] == topic]
-                            st.markdown(f"**{topic}**")
-
-                            for r in topic_results:
-                                classification = r['classification']
-                                color = CLASSIFICATION_COLORS.get(classification, "#888")
-                                badge_class = CLASSIFICATION_BADGES.get(classification, "badge-doesnt")
-
-                                # Build extracts HTML
-                                extracts = r.get("relevant_extracts", [])
-                                if extracts:
-                                    extracts_html = "".join(
-                                        f'<div style="background:#fafafa;border-left:3px solid {color};'
-                                        f'padding:6px 10px;margin:4px 0;border-radius:0 4px 4px 0;'
-                                        f'font-size:12px;color:#555555;font-style:italic;">'
-                                        f'"{extract}"</div>'
-                                        for extract in extracts
-                                    )
-                                    extracts_section = (
-                                        f'<p style="margin:8px 0 4px 0;font-size:11px;color:#888888;'
-                                        f'text-transform:uppercase;letter-spacing:0.5px;">Relevant text found:</p>'
-                                        f'{extracts_html}'
-                                    )
-                                else:
-                                    extracts_section = (
-                                        f'<p style="margin:8px 0 4px 0;font-size:12px;color:#dc2626;'
-                                        f'font-style:italic;">No relevant text found in report</p>'
-                                    )
-
-                                # Truncate long requirements for display
-                                req_text = r.get("requirement", "")
-                                if len(req_text) > 200:
-                                    req_text = req_text[:200] + "…"
-
-                                st.markdown(
-                                    f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;'
-                                    f'border-left:4px solid {color};">'
-                                    # Classification badge + requirement
-                                    f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;">'
-                                    f'<span style="font-size:13px;color:#1a1a1a;flex:1;">{req_text}</span>'
-                                    f'<span class="{badge_class}" style="white-space:nowrap;">{classification}</span>'
-                                    f'</div>'
-                                    # Extracts
-                                    f'{extracts_section}'
-                                    # Rationale
-                                    f'<p style="margin:8px 0 0 0;font-size:12px;color:#222222;">'
-                                    f'<strong>Rationale:</strong> {r.get("rationale", "")}</p>'
-                                    f'</div>',
-                                    unsafe_allow_html=True
-                                )
-
+        if st.button(
+            "Analyse Report", disabled=analyse_disabled, type="primary"
+        ):
+            if not api_key:
+                st.error("Please enter your Anthropic API key")
+            elif len(selected_frameworks) == 0:
+                st.error("Please select at least one framework")
+            elif not uploaded_file and not pasted_text:
+                st.error("Please upload a PDF or paste text")
             else:
-                st.info("Upload a document and click 'Analyze Report' to see results")
+                if uploaded_file:
+                    if page_end is not None and page_start > page_end:
+                        st.error("'From page' must be \u2264 'To page'.")
+                        st.stop()
+                    with st.spinner("Extracting text from PDF..."):
+                        try:
+                            text_list = extract_text_from_pdf(uploaded_file)
+                            total = len(text_list)
+                            start_idx = max(0, page_start - 1)
+                            end_idx = (
+                                page_end if page_end is not None else total
+                            )
+                            text_list = text_list[start_idx:end_idx]
+                            st.success(
+                                f"Analysing pages {page_start}\u2013{end_idx} "
+                                f"({len(text_list)} of {total} pages)"
+                            )
+                        except Exception as e:
+                            st.error(f"Failed to extract PDF: {e}")
+                            st.stop()
+                else:
+                    text_list = [
+                        p.strip().replace('\n', ' ')
+                        for p in pasted_text.split('\n\n') if p.strip()
+                    ]
+                    st.info(f"Processing {len(text_list)} paragraphs")
+
+                report_text = "\n\n".join(text_list)
+
+                st.markdown("### Analysing with Claude...")
+                progress_bar = st.progress(0)
+
+                try:
+                    results, framework_summaries, token_usage = (
+                        claude_analyze_report(
+                            report_text, selected_frameworks,
+                            api_key, framework_requirements, progress_bar
+                        )
+                    )
+                    st.session_state.analysis_results = results
+                    st.session_state.framework_summaries = (
+                        framework_summaries
+                    )
+                    st.session_state.num_pages = len(text_list)
+                    st.session_state.token_usage = token_usage
+                    st.success("Analysis complete!")
+                except anthropic.AuthenticationError:
+                    st.error(
+                        "Invalid API key. Please check your "
+                        "Anthropic API key."
+                    )
+                except Exception as e:
+                    st.error(f"Analysis failed: {e}")
+
+        # --- Results (full width, below controls) ---
+        st.markdown("---")
+
+        if (
+            'analysis_results' in st.session_state
+            and st.session_state.analysis_results
+        ):
+            results = st.session_state.analysis_results
+            framework_summaries = st.session_state.framework_summaries
+            num_pages = st.session_state.num_pages
+            token_usage = st.session_state.get('token_usage', {})
+
+            total_results = len(results)
+            covers_count = sum(
+                1 for r in results
+                if r['classification'] == CLASSIFICATION_COVERS
+            )
+            partly_count = sum(
+                1 for r in results
+                if r['classification'] == CLASSIFICATION_PARTLY
+            )
+            doesnt_count = sum(
+                1 for r in results
+                if r['classification'] == CLASSIFICATION_DOESNT
+            )
+            best_fw = (
+                max(
+                    framework_summaries.items(),
+                    key=lambda x: x[1]['avg_score']
+                )
+                if framework_summaries else None
+            )
+
+            # Summary box
+            summary_html = (
+                '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                'border-radius:8px;padding:16px;margin-bottom:16px;">'
+                '<h4 style="margin:0 0 12px 0;color:#1a1a1a;">'
+                'Analysis Summary</h4>'
+                f'<p style="margin:0 0 8px 0;color:#333333;">'
+                f'Analysed <strong>{num_pages}</strong> pages against '
+                f'<strong>{len(framework_summaries)}</strong> frameworks '
+                f'({total_results} requirements total).</p>'
+                f'<div style="display:flex;gap:12px;flex-wrap:wrap;'
+                f'margin:8px 0;">'
+                f'<span class="badge-covers">{covers_count} Covered</span>'
+                f'<span class="badge-partly">'
+                f'{partly_count} Partly covered</span>'
+                f'<span class="badge-doesnt">'
+                f'{doesnt_count} Not covered</span>'
+                '</div>'
+            )
+            if best_fw:
+                summary_html += (
+                    f'<p style="margin:8px 0 0 0;color:#333333;">'
+                    f'Best alignment with '
+                    f'<strong>{best_fw[0]}</strong>.</p>'
+                )
+            summary_html += '</div>'
+            st.markdown(summary_html, unsafe_allow_html=True)
+
+            # Cost estimate
+            if token_usage:
+                models_used = token_usage.get('models_used', set())
+                used_sonnet = "claude-sonnet-4-20250514" in models_used
+                used_haiku = "claude-haiku-4-5-20251001" in models_used
+
+                if used_sonnet and used_haiku:
+                    model_label = "Haiku 4.5 + Sonnet 4 (fallback)"
+                    input_rate, output_rate = 3.0, 15.0
+                elif used_sonnet:
+                    model_label = "Sonnet 4 (fallback)"
+                    input_rate, output_rate = 3.0, 15.0
+                else:
+                    model_label = "Haiku 4.5"
+                    input_rate, output_rate = 1.0, 5.0
+
+                input_cost = (
+                    token_usage.get('input_tokens', 0)
+                    / 1_000_000 * input_rate
+                )
+                output_cost = (
+                    token_usage.get('output_tokens', 0)
+                    / 1_000_000 * output_rate
+                )
+                cache_reads = token_usage.get('cache_read_tokens', 0)
+                cache_savings = (
+                    cache_reads / 1_000_000 * (input_rate * 0.9)
+                )
+                total_cost = input_cost + output_cost
+
+                model_note = ""
+                if used_sonnet and used_haiku:
+                    model_note = (
+                        "<br><em style='font-size:12px;color:#d97706;'>"
+                        "\u26a0 Haiku hit rate limits \u2014 some frameworks "
+                        "analysed with Sonnet. Cost shown is upper-bound "
+                        "estimate.</em>"
+                    )
+                elif used_sonnet:
+                    model_note = (
+                        "<br><em style='font-size:12px;color:#d97706;'>"
+                        "\u26a0 Haiku rate-limited \u2014 all frameworks "
+                        "analysed with Sonnet.</em>"
+                    )
+
+                itok = token_usage.get("input_tokens", 0)
+                otok = token_usage.get("output_tokens", 0)
+                cache_str = (
+                    f" \u00b7 Cache saved ~${cache_savings:.4f}"
+                    if cache_reads > 0 else ""
+                )
+                st.markdown(
+                    f'<div style="background:#f5f5f5;border:1px solid '
+                    f'#e0e0e0;border-radius:8px;padding:12px;'
+                    f'margin-bottom:16px;font-size:13px;color:#333333;">'
+                    f'<strong>Model:</strong> {model_label} \u00b7 '
+                    f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
+                    f'({itok:,} input / {otok:,} output tokens)'
+                    f'{cache_str}{model_note}'
+                    f'</div>',
+                    unsafe_allow_html=True
+                )
+
+            # Export button
+            excel_data = generate_results_excel(results, framework_summaries)
+            st.download_button(
+                label="\U0001f4e5 Download Results as Excel",
+                data=excel_data,
+                file_name="framework_analysis_results.xlsx",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument"
+                    ".spreadsheetml.sheet"
+                ),
+            )
+
+            # == DETAILED ANALYSIS (first) ==
+            st.markdown("---")
+            st.subheader(
+                "Detailed Analysis \u2014 How does your report perform "
+                "against selected frameworks?"
+            )
+
+            for framework in st.session_state.selected_frameworks:
+                fw_results = [
+                    r for r in results if r['framework'] == framework
+                ]
+                if not fw_results:
+                    continue
+
+                summary = framework_summaries.get(framework, {})
+                counts = summary.get("counts", {})
+                c_count = counts.get(CLASSIFICATION_COVERS, 0)
+                p_count = counts.get(CLASSIFICATION_PARTLY, 0)
+                d_count = counts.get(CLASSIFICATION_DOESNT, 0)
+
+                with st.expander(
+                    f"**{framework}** \u2014 {c_count} covered \u00b7 "
+                    f"{p_count} partly \u00b7 {d_count} not covered",
+                    expanded=True
+                ):
+                    topics_seen = []
+                    for r in fw_results:
+                        if r["topic"] not in topics_seen:
+                            topics_seen.append(r["topic"])
+
+                    for topic in topics_seen:
+                        topic_results = [
+                            r for r in fw_results if r["topic"] == topic
+                        ]
+                        st.markdown(f"**{topic}**")
+
+                        for r in topic_results:
+                            classification = r['classification']
+                            clr = CLASSIFICATION_COLORS.get(
+                                classification, "#888"
+                            )
+                            badge_class = CLASSIFICATION_BADGES.get(
+                                classification, "badge-doesnt"
+                            )
+
+                            extracts = r.get("relevant_extracts", [])
+                            if extracts:
+                                extracts_html = "".join(
+                                    f'<div style="background:#fafafa;'
+                                    f'border-left:3px solid {clr};'
+                                    f'padding:6px 10px;margin:4px 0;'
+                                    f'border-radius:0 4px 4px 0;'
+                                    f'font-size:12px;color:#555555;'
+                                    f'font-style:italic;">'
+                                    f'"{ext}"</div>'
+                                    for ext in extracts
+                                )
+                                extracts_section = (
+                                    '<p style="margin:8px 0 4px 0;'
+                                    'font-size:11px;color:#888888;'
+                                    'text-transform:uppercase;'
+                                    'letter-spacing:0.5px;">'
+                                    'Relevant text found:</p>'
+                                    f'{extracts_html}'
+                                )
+                            else:
+                                extracts_section = (
+                                    '<p style="margin:8px 0 4px 0;'
+                                    'font-size:12px;color:#dc2626;'
+                                    'font-style:italic;">'
+                                    'No relevant text found in report</p>'
+                                )
+
+                            req_text = r.get("requirement", "")
+                            if len(req_text) > 200:
+                                req_text = req_text[:200] + "\u2026"
+
+                            st.markdown(
+                                f'<div style="background:#f5f5f5;'
+                                f'padding:12px;border-radius:8px;'
+                                f'margin:8px 0;border-left:4px solid '
+                                f'{clr};">'
+                                f'<div style="display:flex;'
+                                f'justify-content:space-between;'
+                                f'align-items:flex-start;gap:12px;">'
+                                f'<span style="font-size:13px;'
+                                f'color:#1a1a1a;flex:1;">'
+                                f'{req_text}</span>'
+                                f'<span class="{badge_class}" '
+                                f'style="white-space:nowrap;">'
+                                f'{classification}</span>'
+                                f'</div>'
+                                f'{extracts_section}'
+                                f'<p style="margin:8px 0 0 0;'
+                                f'font-size:12px;color:#222222;">'
+                                f'<strong>Rationale:</strong> '
+                                f'{r.get("rationale", "")}</p>'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
+
+            # == GAP ANALYSIS (second) ==
+            st.markdown("---")
+            render_gap_analysis(results, framework_summaries)
+
+        else:
+            st.info(
+                "Upload a document and click 'Analyse Report' "
+                "to see results"
+            )
 
     # ============================================
     # TAB 3: SIDE-BY-SIDE COMPARISON
@@ -1689,30 +1990,32 @@ def main():
     with tab3:
         st.header("Side-by-Side Report Comparison")
         st.markdown(
-            "Upload two ESG reports to compare how each covers the same framework requirements. "
-            "Useful for benchmarking year-on-year progress or comparing two firms' disclosures."
+            "Upload two ESG reports to compare how each covers the same "
+            "framework requirements. Useful for benchmarking year-on-year "
+            "progress or comparing two firms' disclosures."
         )
 
-        # API key for comparison
         cmp_api_key = st.text_input(
-            "Anthropic API Key",
-            type="password",
+            "Anthropic API Key", type="password",
             placeholder="sk-ant-...",
             help="Required for analysis. Your key is not stored.",
             key="cmp_api_key"
         )
 
-        # Available frameworks from Excel
-        available_frameworks = list(framework_requirements.keys()) if framework_requirements else list(FRAMEWORK_COLORS.keys())
+        available_frameworks = (
+            list(framework_requirements.keys())
+            if framework_requirements
+            else list(FRAMEWORK_COLORS.keys())
+        )
 
-        # Framework selection for comparison
         st.subheader("Select Frameworks to Compare")
-        st.markdown("*Select the same frameworks for both reports.*")
 
         cmp_col_sel1, cmp_col_sel2 = st.columns(2)
         with cmp_col_sel1:
             if st.button("Select All", key="cmp_select_all"):
-                st.session_state.cmp_selected_frameworks = available_frameworks.copy()
+                st.session_state.cmp_selected_frameworks = (
+                    available_frameworks.copy()
+                )
         with cmp_col_sel2:
             if st.button("Clear All", key="cmp_clear_all"):
                 st.session_state.cmp_selected_frameworks = []
@@ -1724,22 +2027,34 @@ def main():
         cmp_cols = st.columns(3)
         for i, fw in enumerate(available_frameworks):
             with cmp_cols[i % 3]:
-                req_count = sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+                req_count = sum(
+                    len(reqs)
+                    for reqs in framework_requirements.get(fw, {}).values()
+                )
                 checked = st.checkbox(
                     f"{fw}",
                     value=fw in st.session_state.cmp_selected_frameworks,
                     key=f"cmp_fw_{fw}",
-                    help=f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} ({req_count} requirements)"
+                    help=(
+                        f"{FRAMEWORK_FULL_NAMES.get(fw, fw)} "
+                        f"({req_count} requirements)"
+                    )
                 )
                 if checked:
                     cmp_selected.append(fw)
         st.session_state.cmp_selected_frameworks = cmp_selected
 
         cmp_total_reqs = sum(
-            sum(len(reqs) for reqs in framework_requirements.get(fw, {}).values())
+            sum(
+                len(reqs)
+                for reqs in framework_requirements.get(fw, {}).values()
+            )
             for fw in cmp_selected
         )
-        st.markdown(f"**{len(cmp_selected)}** framework(s) · **{cmp_total_reqs}** requirements each")
+        st.markdown(
+            f"**{len(cmp_selected)}** framework(s) \u00b7 "
+            f"**{cmp_total_reqs}** requirements each"
+        )
 
         # Two-column upload
         st.subheader("Upload Two Reports")
@@ -1747,8 +2062,12 @@ def main():
 
         with up_col1:
             st.markdown("**Report A**")
-            cmp_name_a = st.text_input("Label for Report A", value="Report A", key="cmp_name_a")
-            cmp_file_a = st.file_uploader("Upload PDF", type="pdf", key="cmp_file_a")
+            cmp_name_a = st.text_input(
+                "Label for Report A", value="Report A", key="cmp_name_a"
+            )
+            cmp_file_a = st.file_uploader(
+                "Upload PDF", type="pdf", key="cmp_file_a"
+            )
             cmp_page_start_a, cmp_page_end_a = 1, None
             if cmp_file_a:
                 import pymupdf
@@ -1759,14 +2078,22 @@ def main():
                 st.markdown(f"*{total_a} pages*")
                 pa_c1, pa_c2 = st.columns(2)
                 with pa_c1:
-                    cmp_page_start_a = st.number_input("From page", 1, total_a, 1, key="cmp_ps_a")
+                    cmp_page_start_a = st.number_input(
+                        "From page", 1, total_a, 1, key="cmp_ps_a"
+                    )
                 with pa_c2:
-                    cmp_page_end_a = st.number_input("To page", 1, total_a, total_a, key="cmp_pe_a")
+                    cmp_page_end_a = st.number_input(
+                        "To page", 1, total_a, total_a, key="cmp_pe_a"
+                    )
 
         with up_col2:
             st.markdown("**Report B**")
-            cmp_name_b = st.text_input("Label for Report B", value="Report B", key="cmp_name_b")
-            cmp_file_b = st.file_uploader("Upload PDF", type="pdf", key="cmp_file_b")
+            cmp_name_b = st.text_input(
+                "Label for Report B", value="Report B", key="cmp_name_b"
+            )
+            cmp_file_b = st.file_uploader(
+                "Upload PDF", type="pdf", key="cmp_file_b"
+            )
             cmp_page_start_b, cmp_page_end_b = 1, None
             if cmp_file_b:
                 import pymupdf
@@ -1777,13 +2104,23 @@ def main():
                 st.markdown(f"*{total_b} pages*")
                 pb_c1, pb_c2 = st.columns(2)
                 with pb_c1:
-                    cmp_page_start_b = st.number_input("From page", 1, total_b, 1, key="cmp_ps_b")
+                    cmp_page_start_b = st.number_input(
+                        "From page", 1, total_b, 1, key="cmp_ps_b"
+                    )
                 with pb_c2:
-                    cmp_page_end_b = st.number_input("To page", 1, total_b, total_b, key="cmp_pe_b")
+                    cmp_page_end_b = st.number_input(
+                        "To page", 1, total_b, total_b, key="cmp_pe_b"
+                    )
 
-        # Compare button
-        cmp_disabled = (not cmp_file_a or not cmp_file_b) or len(cmp_selected) == 0 or not cmp_api_key
-        if st.button("Compare Reports", disabled=cmp_disabled, type="primary", key="cmp_run"):
+        cmp_disabled = (
+            (not cmp_file_a or not cmp_file_b)
+            or len(cmp_selected) == 0
+            or not cmp_api_key
+        )
+        if st.button(
+            "Compare Reports", disabled=cmp_disabled,
+            type="primary", key="cmp_run"
+        ):
             if not cmp_api_key:
                 st.error("Please enter your Anthropic API key")
             elif not cmp_file_a or not cmp_file_b:
@@ -1791,39 +2128,48 @@ def main():
             elif len(cmp_selected) == 0:
                 st.error("Please select at least one framework")
             else:
-                # Extract text from both
                 with st.spinner(f"Extracting text from {cmp_name_a}..."):
                     text_a = extract_text_from_pdf(cmp_file_a)
                     start_a = max(0, cmp_page_start_a - 1)
-                    end_a = cmp_page_end_a if cmp_page_end_a else len(text_a)
+                    end_a = (
+                        cmp_page_end_a
+                        if cmp_page_end_a else len(text_a)
+                    )
                     text_a = text_a[start_a:end_a]
 
                 with st.spinner(f"Extracting text from {cmp_name_b}..."):
                     text_b = extract_text_from_pdf(cmp_file_b)
                     start_b = max(0, cmp_page_start_b - 1)
-                    end_b = cmp_page_end_b if cmp_page_end_b else len(text_b)
+                    end_b = (
+                        cmp_page_end_b
+                        if cmp_page_end_b else len(text_b)
+                    )
                     text_b = text_b[start_b:end_b]
 
                 report_a = "\n\n".join(text_a)
                 report_b = "\n\n".join(text_b)
 
-                # Analyse Report A
                 st.markdown(f"### Analysing {cmp_name_a}...")
                 progress_a = st.progress(0)
                 try:
-                    results_a, summaries_a, usage_a = claude_analyze_report(
-                        report_a, cmp_selected, cmp_api_key, framework_requirements, progress_a
+                    results_a, summaries_a, usage_a = (
+                        claude_analyze_report(
+                            report_a, cmp_selected, cmp_api_key,
+                            framework_requirements, progress_a
+                        )
                     )
                 except Exception as e:
                     st.error(f"Failed on {cmp_name_a}: {e}")
                     results_a, summaries_a = [], {}
 
-                # Analyse Report B
                 st.markdown(f"### Analysing {cmp_name_b}...")
                 progress_b = st.progress(0)
                 try:
-                    results_b, summaries_b, usage_b = claude_analyze_report(
-                        report_b, cmp_selected, cmp_api_key, framework_requirements, progress_b
+                    results_b, summaries_b, usage_b = (
+                        claude_analyze_report(
+                            report_b, cmp_selected, cmp_api_key,
+                            framework_requirements, progress_b
+                        )
                     )
                 except Exception as e:
                     st.error(f"Failed on {cmp_name_b}: {e}")
@@ -1840,7 +2186,10 @@ def main():
                     st.success("Comparison complete!")
 
         # --- Display comparison results ---
-        if 'cmp_results_a' in st.session_state and st.session_state.cmp_results_a:
+        if (
+            'cmp_results_a' in st.session_state
+            and st.session_state.cmp_results_a
+        ):
             results_a = st.session_state.cmp_results_a
             results_b = st.session_state.cmp_results_b
             summaries_a = st.session_state.cmp_summaries_a
@@ -1852,26 +2201,31 @@ def main():
             st.markdown("---")
             st.subheader("Comparison Results")
 
-            # Summary table
             st.markdown(
-                f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;border-radius:8px;'
-                f'padding:16px;margin-bottom:16px;">'
-                f'<h4 style="margin:0 0 12px 0;color:#1a1a1a;">Coverage Summary</h4>'
-                f'<table style="width:100%;border-collapse:collapse;font-size:13px;">'
-                f'<tr style="border-bottom:2px solid #e0e0e0;">'
-                f'<th style="text-align:left;padding:6px;color:#1a1a1a;">Framework</th>'
-                f'<th style="text-align:center;padding:6px;color:#1a1a1a;" colspan="3">{name_a}</th>'
-                f'<th style="text-align:center;padding:6px;color:#1a1a1a;" colspan="3">{name_b}</th>'
-                f'</tr>'
-                f'<tr style="border-bottom:1px solid #e0e0e0;font-size:11px;color:#888;">'
-                f'<td></td>'
-                f'<td style="text-align:center;padding:4px;">Covers</td>'
-                f'<td style="text-align:center;padding:4px;">Partly</td>'
-                f'<td style="text-align:center;padding:4px;">Doesn\'t</td>'
-                f'<td style="text-align:center;padding:4px;">Covers</td>'
-                f'<td style="text-align:center;padding:4px;">Partly</td>'
-                f'<td style="text-align:center;padding:4px;">Doesn\'t</td>'
-                f'</tr>',
+                '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                'border-radius:8px;padding:16px;margin-bottom:16px;">'
+                '<h4 style="margin:0 0 12px 0;color:#1a1a1a;">'
+                'Coverage Summary</h4>'
+                '<table style="width:100%;border-collapse:collapse;'
+                'font-size:13px;">'
+                '<tr style="border-bottom:2px solid #e0e0e0;">'
+                '<th style="text-align:left;padding:6px;color:#1a1a1a;">'
+                'Framework</th>'
+                f'<th style="text-align:center;padding:6px;color:#1a1a1a;"'
+                f' colspan="3">{name_a}</th>'
+                f'<th style="text-align:center;padding:6px;color:#1a1a1a;"'
+                f' colspan="3">{name_b}</th>'
+                '</tr>'
+                '<tr style="border-bottom:1px solid #e0e0e0;'
+                'font-size:11px;color:#888;">'
+                '<td></td>'
+                '<td style="text-align:center;padding:4px;">Covered</td>'
+                '<td style="text-align:center;padding:4px;">Partly</td>'
+                '<td style="text-align:center;padding:4px;">Not</td>'
+                '<td style="text-align:center;padding:4px;">Covered</td>'
+                '<td style="text-align:center;padding:4px;">Partly</td>'
+                '<td style="text-align:center;padding:4px;">Not</td>'
+                '</tr>',
                 unsafe_allow_html=True
             )
 
@@ -1880,43 +2234,53 @@ def main():
                 sa = summaries_a.get(fw, {}).get("counts", {})
                 sb = summaries_b.get(fw, {}).get("counts", {})
                 table_rows += (
-                    f'<tr style="border-bottom:1px solid #f0f0f0;">'
-                    f'<td style="padding:6px;font-weight:600;color:#1a1a1a;">{fw}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#dcfce7;color:#166534;">'
+                    '<tr style="border-bottom:1px solid #f0f0f0;">'
+                    f'<td style="padding:6px;font-weight:600;'
+                    f'color:#1a1a1a;">{fw}</td>'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#dcfce7;color:#166534;">'
                     f'{sa.get(CLASSIFICATION_COVERS, 0)}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#fef3c7;color:#92400e;">'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#fef3c7;color:#92400e;">'
                     f'{sa.get(CLASSIFICATION_PARTLY, 0)}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#fee2e2;color:#991b1b;">'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#fee2e2;color:#991b1b;">'
                     f'{sa.get(CLASSIFICATION_DOESNT, 0)}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#dcfce7;color:#166534;">'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#dcfce7;color:#166534;">'
                     f'{sb.get(CLASSIFICATION_COVERS, 0)}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#fef3c7;color:#92400e;">'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#fef3c7;color:#92400e;">'
                     f'{sb.get(CLASSIFICATION_PARTLY, 0)}</td>'
-                    f'<td style="text-align:center;padding:6px;background:#fee2e2;color:#991b1b;">'
+                    f'<td style="text-align:center;padding:6px;'
+                    f'background:#fee2e2;color:#991b1b;">'
                     f'{sb.get(CLASSIFICATION_DOESNT, 0)}</td>'
-                    f'</tr>'
+                    '</tr>'
                 )
+            st.markdown(
+                f'{table_rows}</table></div>', unsafe_allow_html=True
+            )
 
-            st.markdown(f'{table_rows}</table></div>', unsafe_allow_html=True)
-
-            # Detailed requirement-by-requirement comparison
             st.subheader("Requirement-by-Requirement")
 
-            # Build lookup for results_b
             b_lookup = {}
             for r in results_b:
                 key = (r["framework"], r["topic"], r["requirement"][:100])
                 b_lookup[key] = r
 
             for fw in common_frameworks:
-                fw_results_a = [r for r in results_a if r["framework"] == fw]
+                fw_results_a = [
+                    r for r in results_a if r["framework"] == fw
+                ]
                 if not fw_results_a:
                     continue
 
-                # Count differences
                 better_a, better_b, same = 0, 0, 0
                 for r_a in fw_results_a:
-                    key = (r_a["framework"], r_a["topic"], r_a["requirement"][:100])
+                    key = (
+                        r_a["framework"], r_a["topic"],
+                        r_a["requirement"][:100]
+                    )
                     r_b = b_lookup.get(key)
                     if r_b:
                         s_a = classification_to_score(r_a["classification"])
@@ -1929,7 +2293,8 @@ def main():
                             same += 1
 
                 with st.expander(
-                    f"**{fw}** — {name_a} leads on {better_a} · {name_b} leads on {better_b} · {same} same"
+                    f"**{fw}** \u2014 {name_a} leads on {better_a} \u00b7 "
+                    f"{name_b} leads on {better_b} \u00b7 {same} same"
                 ):
                     topics_seen = []
                     for r in fw_results_a:
@@ -1937,51 +2302,74 @@ def main():
                             topics_seen.append(r["topic"])
 
                     for topic in topics_seen:
-                        topic_results = [r for r in fw_results_a if r["topic"] == topic]
+                        topic_results = [
+                            r for r in fw_results_a if r["topic"] == topic
+                        ]
                         st.markdown(f"**{topic}**")
 
                         for r_a in topic_results:
-                            key = (r_a["framework"], r_a["topic"], r_a["requirement"][:100])
+                            key = (
+                                r_a["framework"], r_a["topic"],
+                                r_a["requirement"][:100]
+                            )
                             r_b = b_lookup.get(key)
 
                             class_a = r_a["classification"]
-                            class_b = r_b["classification"] if r_b else CLASSIFICATION_DOESNT
-                            color_a = CLASSIFICATION_COLORS.get(class_a, "#888")
-                            color_b = CLASSIFICATION_COLORS.get(class_b, "#888")
-                            badge_a = CLASSIFICATION_BADGES.get(class_a, "badge-doesnt")
-                            badge_b = CLASSIFICATION_BADGES.get(class_b, "badge-doesnt")
+                            class_b = (
+                                r_b["classification"]
+                                if r_b else CLASSIFICATION_DOESNT
+                            )
+                            badge_a = CLASSIFICATION_BADGES.get(
+                                class_a, "badge-doesnt"
+                            )
+                            badge_b = CLASSIFICATION_BADGES.get(
+                                class_b, "badge-doesnt"
+                            )
 
                             req_text = r_a["requirement"]
                             if len(req_text) > 180:
-                                req_text = req_text[:180] + "…"
+                                req_text = req_text[:180] + "\u2026"
 
                             st.markdown(
-                                f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin:8px 0;">'
-                                f'<p style="margin:0 0 8px 0;font-size:13px;color:#1a1a1a;">{req_text}</p>'
-                                f'<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;">'
+                                f'<div style="background:#f5f5f5;'
+                                f'padding:12px;border-radius:8px;'
+                                f'margin:8px 0;">'
+                                f'<p style="margin:0 0 8px 0;'
+                                f'font-size:13px;color:#1a1a1a;">'
+                                f'{req_text}</p>'
+                                f'<div style="display:flex;gap:16px;'
+                                f'align-items:center;flex-wrap:wrap;">'
                                 f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#888;text-transform:uppercase;">{name_a}</span><br>'
-                                f'<span class="{badge_a}">{class_a}</span>'
+                                f'<span style="font-size:11px;color:#888;'
+                                f'text-transform:uppercase;">'
+                                f'{name_a}</span><br>'
+                                f'<span class="{badge_a}">'
+                                f'{class_a}</span>'
                                 f'</div>'
                                 f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#888;text-transform:uppercase;">{name_b}</span><br>'
-                                f'<span class="{badge_b}">{class_b}</span>'
+                                f'<span style="font-size:11px;color:#888;'
+                                f'text-transform:uppercase;">'
+                                f'{name_b}</span><br>'
+                                f'<span class="{badge_b}">'
+                                f'{class_b}</span>'
                                 f'</div>'
                                 f'</div>'
                                 f'</div>',
                                 unsafe_allow_html=True
                             )
 
-            # Export comparison
             st.markdown("---")
             cmp_excel = generate_comparison_excel(
                 results_a, results_b, name_a, name_b, common_frameworks
             )
             st.download_button(
-                label="Download Comparison as Excel",
+                label="\U0001f4e5 Download Comparison as Excel",
                 data=cmp_excel,
                 file_name="framework_comparison.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                mime=(
+                    "application/vnd.openxmlformats-officedocument"
+                    ".spreadsheetml.sheet"
+                ),
                 key="cmp_download"
             )
 
