@@ -802,7 +802,7 @@ def generate_results_excel(results, framework_summaries):
 
     for i, r in enumerate(results, 2):
         ws_detail.cell(row=i, column=1, value=r["framework"]).border = thin_border
-        ws_detail.cell(row=i, column=2, value=r["topic"]).border = thin_border
+        ws_detail.cell(row=i, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
         req_cell = ws_detail.cell(row=i, column=3, value=r["requirement"])
         req_cell.alignment = Alignment(wrap_text=True)
         req_cell.border = thin_border
@@ -843,7 +843,7 @@ def generate_results_excel(results, framework_summaries):
     for r in results:
         if r["classification"] != CLASSIFICATION_COVERS:
             ws_gap.cell(row=gap_row, column=1, value=r["framework"]).border = thin_border
-            ws_gap.cell(row=gap_row, column=2, value=r["topic"]).border = thin_border
+            ws_gap.cell(row=gap_row, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
             ws_gap.cell(row=gap_row, column=3, value=r["requirement"]).border = thin_border
             class_cell = ws_gap.cell(row=gap_row, column=4, value=r["classification"])
             class_cell.fill = amber_fill if r["classification"] == CLASSIFICATION_PARTLY else red_fill
@@ -908,7 +908,7 @@ def render_gap_analysis(results, framework_summaries):
                         f'<div style="background:#fee2e2;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #dc2626;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
-                        f'<strong>[{r["topic"]}]</strong> {req_text}</p>'
+                        f'<strong>[{prettify_topic_name(r["topic"])}]</strong> {req_text}</p>'
                         f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
@@ -924,7 +924,7 @@ def render_gap_analysis(results, framework_summaries):
                         f'<div style="background:#fef3c7;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #d97706;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
-                        f'<strong>[{r["topic"]}]</strong> {req_text}</p>'
+                        f'<strong>[{prettify_topic_name(r["topic"])}]</strong> {req_text}</p>'
                         f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
@@ -972,7 +972,7 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
         r_b = b_lookup.get(key)
 
         ws.cell(row=row, column=1, value=r_a["framework"]).border = thin_border
-        ws.cell(row=row, column=2, value=r_a["topic"]).border = thin_border
+        ws.cell(row=row, column=2, value=prettify_topic_name(r_a["topic"])).border = thin_border
         req_text = r_a["requirement"]
         if len(req_text) > 150:
             req_text = req_text[:150] + "…"
@@ -1021,6 +1021,16 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
 # REQUIREMENT-LEVEL DIFF FOR SIMILARITY VIEW
 # ============================================
 
+def prettify_topic_name(name):
+    """Insert spaces into concatenated topic names like 'RiskManagement' -> 'Risk Management'."""
+    import re
+    # Handle "and" between words first: "MetricsandTargets" -> "Metrics and Targets"
+    spaced = re.sub(r'([a-z])(and)([A-Z])', r'\1 \2 \3', name)
+    # Then insert space before uppercase letters that follow lowercase
+    spaced = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', spaced)
+    return spaced
+
+
 def compute_requirement_diffs(fw_a, fw_b, framework_requirements):
     """
     Compare requirements between two frameworks for overlapping topics.
@@ -1061,9 +1071,17 @@ def render_diff_html(text_a, text_b):
     import difflib
 
     if text_a is None:
-        return f'<span style="color:#888;font-style:italic;">—</span>', f'<span>{text_b}</span>'
+        return (
+            '<span style="color:#888;font-style:italic;">'
+            'No corresponding requirement</span>',
+            f'<span>{text_b}</span>'
+        )
     if text_b is None:
-        return f'<span>{text_a}</span>', f'<span style="color:#888;font-style:italic;">—</span>'
+        return (
+            f'<span>{text_a}</span>',
+            '<span style="color:#888;font-style:italic;">'
+            'No corresponding requirement</span>'
+        )
 
     words_a = text_a.split()
     words_b = text_b.split()
@@ -1384,7 +1402,7 @@ def main():
                                 for comp in comparisons:
                                     if comp["topic"] != current_topic:
                                         current_topic = comp["topic"]
-                                        st.markdown(f"**{current_topic}**")
+                                        st.markdown(f"**{prettify_topic_name(current_topic)}**")
 
                                     html_a, html_b = render_diff_html(
                                         comp["req_a"], comp["req_b"]
@@ -1898,7 +1916,7 @@ def main():
                         topic_results = [
                             r for r in fw_results if r["topic"] == topic
                         ]
-                        st.markdown(f"**{topic}**")
+                        st.markdown(f"**{prettify_topic_name(topic)}**")
 
                         for r in topic_results:
                             classification = r['classification']
@@ -2296,7 +2314,7 @@ def main():
                         topic_results = [
                             r for r in fw_results_a if r["topic"] == topic
                         ]
-                        st.markdown(f"**{topic}**")
+                        st.markdown(f"**{prettify_topic_name(topic)}**")
 
                         for r_a in topic_results:
                             key = (
