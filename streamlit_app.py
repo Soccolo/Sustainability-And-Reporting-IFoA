@@ -1167,12 +1167,10 @@ def main():
         st.markdown("### How to use the Report Analyser")
         st.markdown(
             "1. Go to the **Report Analyser** tab.\n"
-            "2. Enter your Anthropic API key (get one free at "
-            "[console.anthropic.com](https://console.anthropic.com)).\n"
-            "3. Select the frameworks you want to assess against.\n"
-            "4. Upload your PDF and optionally select a page range.\n"
-            "5. Click **Analyse Report** and wait for results.\n"
-            "6. Review the detailed analysis, gap analysis, and download the Excel export."
+            "2. Select the frameworks you want to assess against.\n"
+            "3. Upload your PDF and optionally select a page range.\n"
+            "4. Click **Analyse Report** and wait for results.\n"
+            "5. Review the detailed analysis, gap analysis, and download the Excel export."
         )
 
         st.markdown("---")
@@ -1566,14 +1564,25 @@ def main():
         api_col, upload_col = st.columns([1, 1])
 
         with api_col:
-            api_key = st.text_input(
-                "Anthropic API Key", type="password",
-                placeholder="sk-ant-...",
-                help=(
-                    "Required for analysis. Your key is not stored. "
-                    "Get one at console.anthropic.com"
+            # Use Streamlit Secrets if configured, otherwise show input
+            secrets_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+            if secrets_key:
+                api_key = secrets_key
+                st.markdown(
+                    '<div style="background:#dcfce7;border:1px solid #bbf7d0;'
+                    'border-radius:8px;padding:10px;font-size:13px;color:#166534;">'
+                    '✓ API key configured</div>',
+                    unsafe_allow_html=True
                 )
-            )
+            else:
+                api_key = st.text_input(
+                    "Anthropic API Key", type="password",
+                    placeholder="sk-ant-...",
+                    help=(
+                        "Required for analysis. Your key is not stored. "
+                        "Get one at console.anthropic.com"
+                    )
+                )
 
             st.markdown("**Select Frameworks**")
             available_frameworks = (
@@ -2004,12 +2013,23 @@ def main():
             "progress or comparing two firms' disclosures."
         )
 
-        cmp_api_key = st.text_input(
-            "Anthropic API Key", type="password",
-            placeholder="sk-ant-...",
-            help="Required for analysis. Your key is not stored.",
-            key="cmp_api_key"
-        )
+        # Use Streamlit Secrets if configured, otherwise show input
+        secrets_key = st.secrets.get("ANTHROPIC_API_KEY", "")
+        if secrets_key:
+            cmp_api_key = secrets_key
+            st.markdown(
+                '<div style="background:#dcfce7;border:1px solid #bbf7d0;'
+                'border-radius:8px;padding:10px;font-size:13px;color:#166534;">'
+                '✓ API key configured</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            cmp_api_key = st.text_input(
+                "Anthropic API Key", type="password",
+                placeholder="sk-ant-...",
+                help="Required for analysis. Your key is not stored.",
+                key="cmp_api_key"
+            )
 
         available_frameworks = (
             list(framework_requirements.keys())
