@@ -547,103 +547,143 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
         topics = framework_requirements[framework]
         fw_full_name = FRAMEWORK_FULL_NAMES.get(framework, framework)
 
-        # Build the requirements list for this framework
-        requirements_text = (
-            f"Assess the report against each requirement of the "
-            f"**{fw_full_name} ({framework})** framework.\n\n"
-            f"For each requirement below, find all relevant text in the report, "
-            f"classify it, and explain your reasoning.\n\n"
-        )
+        # --- Helper: make one API call and parse the JSON response ---
+        def _call_and_parse(prompt_text, call_model, call_max_tokens=16384):
+            """Returns (scored_items_list, usage_obj) or raises."""
+            resp = client.messages.create(
+                model=call_model,
+                max_tokens=call_max_tokens,
+                system=system_message,
+                messages=[{"role": "user", "content": prompt_text}]
+            )
+            # Check for truncation
+            if resp.stop_reason == "max_tokens":
+                raise ValueError("Response truncated (max_tokens reached)")
 
-        req_index = 1
-        for topic, reqs in topics.items():
-            for req in reqs:
-                requirements_text += f"{req_index}. [{topic}] {req}\n"
-                req_index += 1
+            raw = resp.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[:-3]
+                raw = raw.strip()
 
-        requirements_text += (
-            "\n\nRespond ONLY with a JSON array. Each element must have exactly these keys:\n"
-            "{\n"
-            ' "topic": "<topic name from the square brackets>",\n'
-            ' "requirement": "<the requirement text>",\n'
-            ' "relevant_extracts": ["<short verbatim quote 1 from report>", "<quote 2>", ...],\n'
-            ' "classification": "<one of: Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",\n'
-            ' "rationale": "<2-3 sentence explanation referencing what the report covers or misses>"\n'
-            "}\n\n"
-            "If no relevant text exists for a requirement, set relevant_extracts to an empty array "
-            "and classification to \"Doesn't cover the framework\".\n"
-            "No markdown, no backticks, no preamble — just the raw JSON array."
-        )
+            items = json.loads(raw)
+            return items, resp.usage
+
+        # --- Build the prompt for all requirements in this framework ---
+        def _build_prompt(topic_reqs_dict):
+            """Build requirements prompt from a {topic: [reqs]} dict."""
+            prompt = (
+                f"Assess the report against each requirement of the "
+                f"**{fw_full_name} ({framework})** framework.\n\n"
+                f"For each requirement below, find all relevant text in the report, "
+                f"classify it, and explain your reasoning.\n\n"
+            )
+            idx = 1
+            for t, reqs_list in topic_reqs_dict.items():
+                for req in reqs_list:
+                    prompt += f"{idx}. [{t}] {req}\n"
+                    idx += 1
+            prompt += (
+                "\n\nRespond ONLY with a JSON array. Each element must have exactly these keys:\n"
+                "{\n"
+                ' "topic": "<topic name from the square brackets>",\n'
+                ' "requirement": "<the requirement text>",\n'
+                ' "relevant_extracts": ["<short verbatim quote 1 from report>", "<quote 2>", ...],\n'
+                ' "classification": "<one of: Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",\n'
+                ' "rationale": "<2-3 sentence explanation referencing what the report covers or misses>"\n'
+                "}\n\n"
+                "If no relevant text exists for a requirement, set relevant_extracts to an empty array "
+                "and classification to \"Doesn't cover the framework\".\n"
+                "No markdown, no backticks, no preamble — just the raw JSON array."
+            )
+            return prompt
+
+        requirements_text = _build_prompt(topics)
 
         # Determine which model to use
         model = FALLBACK_MODEL if use_fallback else PRIMARY_MODEL
-        response = None
+        scored_items = None
 
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=8192,
-                system=system_message,
-                messages=[{"role": "user", "content": requirements_text}]
-            )
+            scored_items, usage = _call_and_parse(requirements_text, model)
             models_used.add(model)
-
-        except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
-            # If Haiku fails with rate limit or overload, try Sonnet
-            if model == PRIMARY_MODEL:
-                st.warning(
-                    f"Haiku rate limit hit on {framework} — switching to Sonnet for remaining frameworks."
-                )
-                use_fallback = True
-                try:
-                    response = client.messages.create(
-                        model=FALLBACK_MODEL,
-                        max_tokens=8192,
-                        system=system_message,
-                        messages=[{"role": "user", "content": requirements_text}]
-                    )
-                    models_used.add(FALLBACK_MODEL)
-                except anthropic.APIError as e2:
-                    st.error(f"Sonnet also failed for {framework}: {e2}")
-                    if progress_bar:
-                        progress_bar.progress((step + 1) / total_steps)
-                    continue
-            else:
-                st.error(f"API error for {framework}: {e}")
-                if progress_bar:
-                    progress_bar.progress((step + 1) / total_steps)
-                continue
-
-        except anthropic.APIError as e:
-            st.error(f"API error for {framework}: {e}")
-            if progress_bar:
-                progress_bar.progress((step + 1) / total_steps)
-            continue
-
-        if response is None:
-            if progress_bar:
-                progress_bar.progress((step + 1) / total_steps)
-            continue
-
-        try:
-            # Track token usage
-            usage = response.usage
             input_tokens_total += usage.input_tokens
             output_tokens_total += usage.output_tokens
             cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
             cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
 
-            # Parse the JSON response
-            raw_text = response.content[0].text.strip()
-            # Clean up common formatting issues
-            if raw_text.startswith("```"):
-                raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
-                if raw_text.endswith("```"):
-                    raw_text = raw_text[:-3]
-                raw_text = raw_text.strip()
+        except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
+            # If Haiku fails with rate limit, try Sonnet
+            if model == PRIMARY_MODEL:
+                st.warning(
+                    f"Haiku rate limit hit on {framework} — switching to Sonnet."
+                )
+                use_fallback = True
+                try:
+                    scored_items, usage = _call_and_parse(requirements_text, FALLBACK_MODEL)
+                    models_used.add(FALLBACK_MODEL)
+                    input_tokens_total += usage.input_tokens
+                    output_tokens_total += usage.output_tokens
+                    cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
+                    cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
+                except Exception as e2:
+                    st.error(f"Sonnet also failed for {framework}: {e2}")
+                    scored_items = None
+            else:
+                st.error(f"API error for {framework}: {e}")
+                scored_items = None
 
-            scored_items = json.loads(raw_text)
+        except (ValueError, json.JSONDecodeError):
+            # Response was truncated or couldn't parse — retry per-topic
+            scored_items = None
 
+        except anthropic.APIError as e:
+            st.error(f"API error for {framework}: {e}")
+            scored_items = None
+
+        # --- Fallback: split into per-topic calls if the full call failed ---
+        if scored_items is None and topics:
+            topic_list = list(topics.keys())
+            st.info(
+                f"Splitting {framework} into {len(topic_list)} topic-level "
+                f"calls (response was too large for a single call)..."
+            )
+            scored_items = []
+            retry_model = FALLBACK_MODEL if use_fallback else model
+            for t_name in topic_list:
+                single_topic = {t_name: topics[t_name]}
+                topic_prompt = _build_prompt(single_topic)
+                try:
+                    items, usage = _call_and_parse(topic_prompt, retry_model)
+                    scored_items.extend(items)
+                    models_used.add(retry_model)
+                    input_tokens_total += usage.input_tokens
+                    output_tokens_total += usage.output_tokens
+                    cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
+                    cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
+                except (anthropic.RateLimitError, anthropic.APIStatusError):
+                    # Switch to Sonnet for remaining topics
+                    if retry_model == PRIMARY_MODEL:
+                        use_fallback = True
+                        retry_model = FALLBACK_MODEL
+                        try:
+                            items, usage = _call_and_parse(topic_prompt, FALLBACK_MODEL)
+                            scored_items.extend(items)
+                            models_used.add(FALLBACK_MODEL)
+                            input_tokens_total += usage.input_tokens
+                            output_tokens_total += usage.output_tokens
+                            cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
+                            cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
+                        except Exception as e2:
+                            st.warning(f"Could not analyse {framework}/{t_name}: {e2}")
+                    else:
+                        st.warning(f"Could not analyse {framework}/{t_name}")
+                except Exception as e:
+                    st.warning(f"Could not analyse {framework}/{t_name}: {e}")
+
+        # --- Process scored items ---
+        if scored_items:
             for item in scored_items:
                 # Normalise the classification string
                 raw_class = item.get("classification", CLASSIFICATION_DOESNT).strip()
@@ -663,10 +703,6 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
                     "classification": classification,
                     "rationale": item.get("rationale", "")
                 })
-
-        except json.JSONDecodeError as e:
-            st.warning(f"Could not parse response for {framework}. Raw response saved for debugging.")
-            st.code(raw_text[:500], language="json")
 
         if progress_bar:
             progress_bar.progress((step + 1) / total_steps)
