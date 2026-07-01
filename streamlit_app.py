@@ -12,10 +12,10 @@ import streamlit as st
 
 # Force light theme without needing .streamlit/config.toml
 st._config.set_option("theme.base", "light")
-st._config.set_option("theme.primaryColor", "#ff4b4b")
-st._config.set_option("theme.backgroundColor", "#ffffff")
-st._config.set_option("theme.secondaryBackgroundColor", "#f5f5f5")
-st._config.set_option("theme.textColor", "#1a1a1a")
+st._config.set_option("theme.primaryColor", "#1C6B4A")
+st._config.set_option("theme.backgroundColor", "#F5F1E8")
+st._config.set_option("theme.secondaryBackgroundColor", "#EDE7D8")
+st._config.set_option("theme.textColor", "#152018")
 
 import pandas as pd
 import numpy as np
@@ -37,30 +37,31 @@ st.set_page_config(
 # Custom CSS — force light theme without breaking tabs, Plotly, or alert boxes
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
     /* ===== Global background ===== */
     .stApp {
-        background-color: #ffffff;
-        color: #1a1a1a;
+        background-color: #F5F1E8;
+        color: #152018;
     }
     .main .block-container {
         padding-top: 2rem;
-        color: #1a1a1a;
+        color: #152018;
     }
 
     /* ===== Typography — scoped to avoid Plotly / tab leaks ===== */
     h1, h2, h3, h4 {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
     .stMarkdown, .stMarkdown p, .stMarkdown span, .stMarkdown li,
     .stText, .stCaption, .stSubheader {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
 
     /* ===== Labels (checkbox, select, input, file uploader) ===== */
     .stCheckbox label, .stCheckbox label span,
     .stSelectbox label, .stTextInput label, .stTextArea label,
     .stFileUploader label, .stNumberInput label {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
 
     /* ===== Tabs ===== */
@@ -68,105 +69,105 @@ st.markdown("""
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        background-color: #f0f0f0 !important;
+        background-color: #E9E3D3 !important;
         border-radius: 8px;
         padding: 10px 20px;
-        color: #555555 !important;
+        color: #4B5A50 !important;
     }
     /* Selected tab — higher specificity so it wins */
     .stTabs [data-baseweb="tab"][aria-selected="true"],
     .stTabs [data-baseweb="tab"][aria-selected="true"] * {
-        background-color: #1a1a1a !important;
-        color: #ffffff !important;
+        background-color: #0F3D2A !important;
+        color: #FCFAF3 !important;
     }
 
     /* ===== Buttons ===== */
     .stButton > button {
-        background-color: #f0f0f0 !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
+        background-color: #E9E3D3 !important;
+        color: #152018 !important;
+        border: 1px solid #CFC7B2 !important;
     }
     .stButton > button:hover {
-        background-color: #e0e0e0 !important;
-        border-color: #b0b0b0 !important;
+        background-color: #DDD5C2 !important;
+        border-color: #B8B09A !important;
     }
     .stButton > button[kind="primary"],
     .stButton > button[data-testid="stBaseButton-primary"] {
-        background-color: #ff4b4b !important;
-        color: #ffffff !important;
+        background-color: #1C6B4A !important;
+        color: #FCFAF3 !important;
         border: none !important;
     }
 
     /* ===== Inputs (text, password, number, textarea) ===== */
     .stTextInput input, .stNumberInput input, .stTextArea textarea {
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
+        background-color: #FCFAF3 !important;
+        color: #152018 !important;
+        border: 1px solid #CFC7B2 !important;
     }
     .stTextInput > div > div, .stNumberInput > div > div {
-        background-color: #ffffff !important;
+        background-color: #FCFAF3 !important;
     }
     .stNumberInput button {
-        background-color: #f0f0f0 !important;
-        color: #1a1a1a !important;
-        border-color: #d0d0d0 !important;
+        background-color: #E9E3D3 !important;
+        color: #152018 !important;
+        border-color: #CFC7B2 !important;
     }
 
     /* ===== Select boxes (dropdowns) ===== */
     [data-baseweb="select"] {
-        background-color: #ffffff !important;
+        background-color: #FCFAF3 !important;
     }
     [data-baseweb="select"] > div {
-        background-color: #ffffff !important;
-        border-color: #d0d0d0 !important;
+        background-color: #FCFAF3 !important;
+        border-color: #CFC7B2 !important;
     }
     [data-baseweb="select"] span, [data-baseweb="select"] div {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
     /* Dropdown menu */
     [data-baseweb="popover"], [data-baseweb="menu"] {
-        background-color: #ffffff !important;
+        background-color: #FCFAF3 !important;
     }
     [data-baseweb="popover"] li, [data-baseweb="menu"] li {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
 
     /* ===== File uploader ===== */
     .stFileUploader section {
-        background-color: #f5f5f5 !important;
-        border-color: #d0d0d0 !important;
+        background-color: #EDE7D8 !important;
+        border-color: #CFC7B2 !important;
     }
     .stFileUploader section span, .stFileUploader section small,
     .stFileUploader section div {
-        color: #555555 !important;
+        color: #4B5A50 !important;
     }
     .stFileUploader section button {
-        background-color: #ffffff !important;
-        color: #1a1a1a !important;
-        border: 1px solid #d0d0d0 !important;
+        background-color: #FCFAF3 !important;
+        color: #152018 !important;
+        border: 1px solid #CFC7B2 !important;
     }
     [data-testid="stFileUploaderDropzone"] {
-        background-color: #f5f5f5 !important;
-        border-color: #d0d0d0 !important;
+        background-color: #EDE7D8 !important;
+        border-color: #CFC7B2 !important;
     }
     [data-testid="stFileUploaderDropzone"] * {
-        color: #555555 !important;
+        color: #4B5A50 !important;
     }
     /* Uploaded file name */
     [data-testid="stFileUploaderFile"] span,
     [data-testid="stFileUploaderFile"] div {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
 
     /* ===== Expanders (Results) ===== */
     [data-testid="stExpander"] {
-        background-color: #ffffff !important;
-        border-color: #e0e0e0 !important;
+        background-color: #FCFAF3 !important;
+        border-color: #DDD5C2 !important;
     }
     [data-testid="stExpander"] summary,
     [data-testid="stExpander"] summary span,
     [data-testid="stExpander"] summary p {
-        color: #1a1a1a !important;
+        color: #152018 !important;
     }
 
     /* ===== Alert boxes — inherit their own colours ===== */
@@ -181,23 +182,40 @@ st.markdown("""
 
     /* ===== Badge classes ===== */
     .framework-card {
-        background-color: #f5f5f5;
+        background-color: #EDE7D8;
         border-radius: 8px;
         padding: 1rem;
         margin: 0.5rem 0;
     }
     .badge-covers {
-        background-color: #dcfce7; color: #166534 !important;
+        background-color: #E8F2EA; color: #1C6B4A !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
     .badge-partly {
-        background-color: #fef3c7; color: #92400e !important;
+        background-color: #FBF0D8; color: #B07A18 !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
     .badge-doesnt {
-        background-color: #fee2e2; color: #991b1b !important;
+        background-color: #F8E3DD; color: #B4472F !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
+    /* ===== Terra typography & polish ===== */
+    html, body, .stApp, .stMarkdown, .stButton > button, input, textarea, [data-baseweb="select"] span {
+        font-family: 'Hanken Grotesk', sans-serif;
+    }
+    h1, h2, h3 {
+        font-family: 'Spectral', serif !important;
+        font-weight: 600 !important;
+        letter-spacing: -0.01em;
+    }
+    code, pre { font-family: 'IBM Plex Mono', monospace; }
+    .stButton > button { border-radius: 9px !important; font-weight: 600 !important; }
+    .stButton > button[kind="primary"],
+    .stButton > button[data-testid="stBaseButton-primary"] {
+        box-shadow: 0 8px 18px -8px rgba(28,107,74,.55) !important;
+    }
+    .stTabs [data-baseweb="tab"] { border-radius: 9px; font-weight: 600; }
+    [data-testid="stExpander"] { border-radius: 12px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -457,9 +475,9 @@ CLASSIFICATION_DOESNT = "Doesn't cover the framework"
 ALL_CLASSIFICATIONS = [CLASSIFICATION_COVERS, CLASSIFICATION_PARTLY, CLASSIFICATION_DOESNT]
 
 CLASSIFICATION_COLORS = {
-    CLASSIFICATION_COVERS: "#16a34a",
-    CLASSIFICATION_PARTLY: "#d97706",
-    CLASSIFICATION_DOESNT: "#dc2626",
+    CLASSIFICATION_COVERS: "#1C6B4A",
+    CLASSIFICATION_PARTLY: "#C98A2B",
+    CLASSIFICATION_DOESNT: "#B4472F",
 }
 
 CLASSIFICATION_BADGES = {
@@ -822,10 +840,10 @@ def generate_results_excel(results, framework_summaries):
     ws_summary = wb.active
     ws_summary.title = "Summary"
     header_font = Font(bold=True, size=12, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="1a1a1a")
-    green_fill = PatternFill("solid", fgColor="dcfce7")
-    amber_fill = PatternFill("solid", fgColor="fef3c7")
-    red_fill = PatternFill("solid", fgColor="fee2e2")
+    header_fill = PatternFill("solid", fgColor="0F3D2A")
+    green_fill = PatternFill("solid", fgColor="E8F2EA")
+    amber_fill = PatternFill("solid", fgColor="FBF0D8")
+    red_fill = PatternFill("solid", fgColor="F8E3DD")
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
@@ -947,9 +965,9 @@ def render_gap_analysis(results, framework_summaries):
     partly_count = sum(1 for r in gaps if r["classification"] == CLASSIFICATION_PARTLY)
 
     st.markdown(
-        f'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:16px;margin-bottom:16px;">'
-        f'<h4 style="margin:0 0 8px 0;color:#9a3412;">Gap Analysis — What\'s Missing</h4>'
-        f'<p style="margin:0;color:#333333;">'
+        f'<div style="background:#FDF6EE;border:1px solid #E6D3BE;border-radius:8px;padding:16px;margin-bottom:16px;">'
+        f'<h4 style="margin:0 0 8px 0;color:#8A3A22;">Gap Analysis — What\'s Missing</h4>'
+        f'<p style="margin:0;color:#3B4A40;">'
         f'<span class="badge-doesnt">{doesnt_count} not covered</span>&nbsp;&nbsp;'
         f'<span class="badge-partly">{partly_count} partly covered</span>&nbsp;&nbsp;'
         f'— these requirements need attention.</p>'
@@ -979,11 +997,11 @@ def render_gap_analysis(results, framework_summaries):
                     ref = r.get("reference", "")
                     ref_str = f" · {ref}" if ref else ""
                     st.markdown(
-                        f'<div style="background:#fee2e2;padding:10px;border-radius:6px;margin:6px 0;'
-                        f'border-left:4px solid #dc2626;">'
-                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
+                        f'<div style="background:#F8E3DD;padding:10px;border-radius:6px;margin:6px 0;'
+                        f'border-left:4px solid #B4472F;">'
+                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#152018;">'
                         f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
-                        f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
                     )
@@ -997,11 +1015,11 @@ def render_gap_analysis(results, framework_summaries):
                     ref = r.get("reference", "")
                     ref_str = f" · {ref}" if ref else ""
                     st.markdown(
-                        f'<div style="background:#fef3c7;padding:10px;border-radius:6px;margin:6px 0;'
-                        f'border-left:4px solid #d97706;">'
-                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
+                        f'<div style="background:#FBF0D8;padding:10px;border-radius:6px;margin:6px 0;'
+                        f'border-left:4px solid #C98A2B;">'
+                        f'<p style="margin:0 0 4px 0;font-size:13px;color:#152018;">'
                         f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
-                        f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
                     )
@@ -1017,10 +1035,10 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
     ws.title = "Comparison"
 
     header_font = Font(bold=True, size=11, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="1a1a1a")
-    green_fill = PatternFill("solid", fgColor="dcfce7")
-    amber_fill = PatternFill("solid", fgColor="fef3c7")
-    red_fill = PatternFill("solid", fgColor="fee2e2")
+    header_fill = PatternFill("solid", fgColor="0F3D2A")
+    green_fill = PatternFill("solid", fgColor="E8F2EA")
+    amber_fill = PatternFill("solid", fgColor="FBF0D8")
+    red_fill = PatternFill("solid", fgColor="F8E3DD")
     thin_border = Border(
         left=Side(style="thin"), right=Side(style="thin"),
         top=Side(style="thin"), bottom=Side(style="thin"),
@@ -1170,14 +1188,14 @@ def render_diff_html(text_a, text_b):
 
     if text_a is None:
         return (
-            '<span style="color:#888;font-style:italic;">'
+            '<span style="color:#8A9488;font-style:italic;">'
             'No corresponding requirement</span>',
             f'<span>{text_b}</span>'
         )
     if text_b is None:
         return (
             f'<span>{text_a}</span>',
-            '<span style="color:#888;font-style:italic;">'
+            '<span style="color:#8A9488;font-style:italic;">'
             'No corresponding requirement</span>'
         )
 
@@ -1205,21 +1223,21 @@ def render_diff_html(text_a, text_b):
             html_b_parts.append(" ".join(words_b[j1:j2]))
         elif op == 'replace':
             html_a_parts.append(
-                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'<span style="background:#EEC2B4;padding:1px 3px;border-radius:3px;">'
                 f'{" ".join(words_a[i1:i2])}</span>'
             )
             html_b_parts.append(
-                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'<span style="background:#EEC2B4;padding:1px 3px;border-radius:3px;">'
                 f'{" ".join(words_b[j1:j2])}</span>'
             )
         elif op == 'delete':
             html_a_parts.append(
-                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'<span style="background:#EEC2B4;padding:1px 3px;border-radius:3px;">'
                 f'{" ".join(words_a[i1:i2])}</span>'
             )
         elif op == 'insert':
             html_b_parts.append(
-                f'<span style="background:#fecaca;padding:1px 3px;border-radius:3px;">'
+                f'<span style="background:#EEC2B4;padding:1px 3px;border-radius:3px;">'
                 f'{" ".join(words_b[j1:j2])}</span>'
             )
 
@@ -1349,20 +1367,20 @@ def main():
                     if member["organisation"]:
                         org_line = (
                             '<p style="margin:0 0 8px 0;font-size:12px;'
-                            f'color:#888;">{member["organisation"]}</p>'
+                            f'color:#8A9488;">{member["organisation"]}</p>'
                         )
                     st.markdown(
-                        f'<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                        f'<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
                         f'border-radius:10px;padding:20px;min-height:180px;">'
                         f'<p style="margin:0;font-size:17px;font-weight:700;'
-                        f'color:#1a1a1a;">{member["name"]}</p>'
+                        f'color:#152018;">{member["name"]}</p>'
                         f'<p style="margin:2px 0 4px 0;font-size:13px;'
-                        f'color:#d97706;font-weight:600;">{member["title"]}</p>'
+                        f'color:#C98A2B;font-weight:600;">{member["title"]}</p>'
                         f'{org_line}'
                         f'<p style="margin:0 0 10px 0;font-size:13px;'
-                        f'color:#555;">{member["bio"]}</p>'
+                        f'color:#4B5A50;">{member["bio"]}</p>'
                         f'<a href="{member["linkedin_url"]}" target="_blank" '
-                        f'style="font-size:13px;color:#2563eb;text-decoration:none;">'
+                        f'style="font-size:13px;color:#1C6B4A;text-decoration:none;">'
                         f'LinkedIn &rarr;</a>'
                         f'</div>',
                         unsafe_allow_html=True
@@ -1421,10 +1439,10 @@ def main():
                 fw_url = FRAMEWORK_URLS.get(fw, "")
                 name_html = (
                     f'<a href="{fw_url}" target="_blank" '
-                    f'style="color:#1a1a1a;font-size:13px;'
-                    f'text-decoration:underline;text-decoration-color:#ccc;">{fw}</a>'
+                    f'style="color:#152018;font-size:13px;'
+                    f'text-decoration:underline;text-decoration-color:#CFC7B2;">{fw}</a>'
                     if fw_url else
-                    f'<span style="color:#1a1a1a;font-size:13px;">{fw}</span>'
+                    f'<span style="color:#152018;font-size:13px;">{fw}</span>'
                 )
                 st.markdown(
                     f'<div style="display:flex;align-items:center;gap:8px;'
@@ -1432,7 +1450,7 @@ def main():
                     f'<div style="width:14px;height:14px;background:{color};'
                     f'border-radius:3px;flex-shrink:0;"></div>'
                     f'{name_html}'
-                    f'<span style="color:#888888;font-size:12px;">({count})</span>'
+                    f'<span style="color:#8A9488;font-size:12px;">({count})</span>'
                     f'</div>',
                     unsafe_allow_html=True
                 )
@@ -1440,10 +1458,10 @@ def main():
         with content_col:
             if selected_framework == "ALL":
                 st.markdown(
-                    '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                    '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
                     'border-radius:8px;padding:40px;text-align:center;'
                     'margin:16px 0;">'
-                    '<p style="color:#555;font-size:15px;margin:0;">'
+                    '<p style="color:#4B5A50;font-size:15px;margin:0;">'
                     '&#x1F446; Select a framework from the dropdown above to '
                     'explore its similarity to other frameworks.</p>'
                     '</div>',
@@ -1491,29 +1509,29 @@ def main():
                         pct = score * 100
                         other_fw = item['framework']
                         color = (
-                            "#16a34a" if score >= 0.4
-                            else "#2563eb" if score >= 0.3
-                            else "#d97706" if score >= 0.2
-                            else "#dc2626"
+                            "#1C6B4A" if score >= 0.4
+                            else "#4E8A67" if score >= 0.3
+                            else "#C98A2B" if score >= 0.2
+                            else "#B4472F"
                         )
-                        fw_color = FRAMEWORK_COLORS.get(other_fw, "#888888")
+                        fw_color = FRAMEWORK_COLORS.get(other_fw, "#8A9488")
                         other_full = FRAMEWORK_FULL_NAMES.get(other_fw, other_fw)
 
                         st.markdown(
-                            f'<div style="background:#f5f5f5;padding:12px;'
+                            f'<div style="background:#EDE7D8;padding:12px;'
                             f'border-radius:8px;margin:8px 0;">'
                             f'<div style="display:flex;justify-content:space-between;'
                             f'align-items:center;">'
                             f'<div style="display:flex;align-items:center;gap:8px;">'
                             f'<div style="width:14px;height:14px;background:{fw_color};'
                             f'border-radius:3px;"></div>'
-                            f'<span style="font-weight:600;color:#1a1a1a;" '
+                            f'<span style="font-weight:600;color:#152018;" '
                             f'title="{other_full}">{other_fw}</span>'
                             f'</div>'
                             f'<span style="color:{color};font-weight:700;'
                             f'font-family:monospace;">{pct:.1f}%</span>'
                             f'</div>'
-                            f'<div style="background:#e0e0e0;border-radius:4px;'
+                            f'<div style="background:#DDD5C2;border-radius:4px;'
                             f'height:8px;margin-top:8px;overflow:hidden;">'
                             f'<div style="background:{color};height:100%;'
                             f'width:{pct}%;"></div>'
@@ -1556,18 +1574,18 @@ def main():
                                             comp["req_a"], comp["req_b"]
                                         )
                                         ref_a_html = (
-                                            f' <span style="font-size:10px;color:#888;'
+                                            f' <span style="font-size:10px;color:#8A9488;'
                                             f'font-family:monospace;">({comp["ref_a"]})</span>'
                                             if comp.get("ref_a") else ""
                                         )
                                         ref_b_html = (
-                                            f' <span style="font-size:10px;color:#888;'
+                                            f' <span style="font-size:10px;color:#8A9488;'
                                             f'font-family:monospace;">({comp["ref_b"]})</span>'
                                             if comp.get("ref_b") else ""
                                         )
 
                                         fw_sel_color = FRAMEWORK_COLORS.get(
-                                            selected_framework, "#888"
+                                            selected_framework, "#8A9488"
                                         )
                                         diff_fw_color = FRAMEWORK_COLORS.get(
                                             diff_fw, fw_color
@@ -1576,19 +1594,19 @@ def main():
                                             f'<div style="display:flex;gap:12px;'
                                             f'margin:6px 0;font-size:12px;'
                                             f'line-height:1.5;">'
-                                            f'<div style="flex:1;background:#f0f7ff;'
+                                            f'<div style="flex:1;background:#F1EDE1;'
                                             f'padding:8px;border-radius:6px;'
                                             f'border-left:3px solid {fw_sel_color};">'
-                                            f'<strong style="color:#1a1a1a;">'
+                                            f'<strong style="color:#152018;">'
                                             f'{selected_framework}</strong>{ref_a_html}'
-                                            f'<br><span style="color:#333;">'
+                                            f'<br><span style="color:#3B4A40;">'
                                             f'{html_a}</span></div>'
-                                            f'<div style="flex:1;background:#f0fff4;'
+                                            f'<div style="flex:1;background:#EDF3EA;'
                                             f'padding:8px;border-radius:6px;'
                                             f'border-left:3px solid {diff_fw_color};">'
-                                            f'<strong style="color:#1a1a1a;">'
+                                            f'<strong style="color:#152018;">'
                                             f'{diff_fw}</strong>{ref_b_html}'
-                                            f'<br><span style="color:#333;">'
+                                            f'<br><span style="color:#3B4A40;">'
                                             f'{html_b}</span></div>'
                                             f'</div>',
                                             unsafe_allow_html=True
@@ -1647,14 +1665,14 @@ def main():
                 size="size",
                 color="frameworks" if selected_framework == "ALL" else None,
                 color_continuous_scale=(
-                    "Viridis" if selected_framework == "ALL" else None
+                    ["#E3DCC5", "#4E8A67", "#0F3D2A"] if selected_framework == "ALL" else None
                 ),
                 projection="orthographic"
             )
 
             if selected_framework != "ALL":
                 fig.update_traces(marker=dict(
-                    color=FRAMEWORK_COLORS.get(selected_framework, "#888")
+                    color=FRAMEWORK_COLORS.get(selected_framework, "#8A9488")
                 ))
 
             n_frames = 36
@@ -1671,15 +1689,15 @@ def main():
 
             fig.update_layout(
                 geo=dict(
-                    showland=True, landcolor="#d4e8d0",
-                    showocean=True, oceancolor="#daeaf6",
-                    showcoastlines=True, coastlinecolor="#aaaaaa",
-                    showcountries=True, countrycolor="#cccccc",
-                    showframe=False, bgcolor="#ffffff",
+                    showland=True, landcolor="#DCE3CC",
+                    showocean=True, oceancolor="#EDE7D8",
+                    showcoastlines=True, coastlinecolor="#B4AE9C",
+                    showcountries=True, countrycolor="#CBC3AE",
+                    showframe=False, bgcolor="#F5F1E8",
                     projection_rotation=dict(lon=-20, lat=15),
                 ),
-                paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
-                font=dict(color="#1a1a1a"),
+                paper_bgcolor="#F5F1E8", plot_bgcolor="#F5F1E8",
+                font=dict(color="#152018", family="Hanken Grotesk, sans-serif"),
                 margin=dict(l=0, r=0, t=0, b=0), height=500,
                 updatemenus=[dict(
                     type="buttons", showactive=False,
@@ -1732,8 +1750,8 @@ def main():
             if secrets_key:
                 api_key = secrets_key
                 st.markdown(
-                    '<div style="background:#dcfce7;border:1px solid #bbf7d0;'
-                    'border-radius:8px;padding:10px;font-size:13px;color:#166534;">'
+                    '<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
+                    'border-radius:8px;padding:10px;font-size:13px;color:#1C6B4A;">'
                     '✓ API key configured</div>',
                     unsafe_allow_html=True
                 )
@@ -1954,11 +1972,11 @@ def main():
 
             # Summary box
             summary_html = (
-                '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
                 'border-radius:8px;padding:16px;margin-bottom:16px;">'
-                '<h4 style="margin:0 0 12px 0;color:#1a1a1a;">'
+                '<h4 style="margin:0 0 12px 0;color:#152018;">'
                 'Analysis Summary</h4>'
-                f'<p style="margin:0 0 8px 0;color:#333333;">'
+                f'<p style="margin:0 0 8px 0;color:#3B4A40;">'
                 f'Analysed <strong>{num_pages}</strong> pages against '
                 f'<strong>{len(framework_summaries)}</strong> frameworks '
                 f'({total_results} requirements total).</p>'
@@ -1973,7 +1991,7 @@ def main():
             )
             if best_fw:
                 summary_html += (
-                    f'<p style="margin:8px 0 0 0;color:#333333;">'
+                    f'<p style="margin:8px 0 0 0;color:#3B4A40;">'
                     f'Best alignment with '
                     f'<strong>{best_fw[0]}</strong>.</p>'
                 )
@@ -2013,14 +2031,14 @@ def main():
                 model_note = ""
                 if used_sonnet and used_haiku:
                     model_note = (
-                        "<br><em style='font-size:12px;color:#d97706;'>"
+                        "<br><em style='font-size:12px;color:#C98A2B;'>"
                         "\u26a0 Haiku hit rate limits \u2014 some frameworks "
                         "analysed with Sonnet. Cost shown is upper-bound "
                         "estimate.</em>"
                     )
                 elif used_sonnet:
                     model_note = (
-                        "<br><em style='font-size:12px;color:#d97706;'>"
+                        "<br><em style='font-size:12px;color:#C98A2B;'>"
                         "\u26a0 Haiku rate-limited \u2014 all frameworks "
                         "analysed with Sonnet.</em>"
                     )
@@ -2032,9 +2050,9 @@ def main():
                     if cache_reads > 0 else ""
                 )
                 st.markdown(
-                    f'<div style="background:#f5f5f5;border:1px solid '
-                    f'#e0e0e0;border-radius:8px;padding:12px;'
-                    f'margin-bottom:16px;font-size:13px;color:#333333;">'
+                    f'<div style="background:#EDE7D8;border:1px solid '
+                    f'#DDD5C2;border-radius:8px;padding:12px;'
+                    f'margin-bottom:16px;font-size:13px;color:#3B4A40;">'
                     f'<strong>Model:</strong> {model_label} \u00b7 '
                     f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
                     f'({itok:,} input / {otok:,} output tokens)'
@@ -2094,7 +2112,7 @@ def main():
                         for r in topic_results:
                             classification = r['classification']
                             clr = CLASSIFICATION_COLORS.get(
-                                classification, "#888"
+                                classification, "#8A9488"
                             )
                             badge_class = CLASSIFICATION_BADGES.get(
                                 classification, "badge-doesnt"
@@ -2103,18 +2121,18 @@ def main():
                             extracts = r.get("relevant_extracts", [])
                             if extracts:
                                 extracts_html = "".join(
-                                    f'<div style="background:#fafafa;'
+                                    f'<div style="background:#F5F1E8;'
                                     f'border-left:3px solid {clr};'
                                     f'padding:6px 10px;margin:4px 0;'
                                     f'border-radius:0 4px 4px 0;'
-                                    f'font-size:12px;color:#555555;'
+                                    f'font-size:12px;color:#4B5A50;'
                                     f'font-style:italic;">'
                                     f'"{ext}"</div>'
                                     for ext in extracts
                                 )
                                 extracts_section = (
                                     '<p style="margin:8px 0 4px 0;'
-                                    'font-size:11px;color:#888888;'
+                                    'font-size:11px;color:#8A9488;'
                                     'text-transform:uppercase;'
                                     'letter-spacing:0.5px;">'
                                     'Relevant text found:</p>'
@@ -2123,7 +2141,7 @@ def main():
                             else:
                                 extracts_section = (
                                     '<p style="margin:8px 0 4px 0;'
-                                    'font-size:12px;color:#dc2626;'
+                                    'font-size:12px;color:#B4472F;'
                                     'font-style:italic;">'
                                     'No relevant text found in report</p>'
                                 )
@@ -2134,8 +2152,8 @@ def main():
 
                             ref = r.get("reference", "")
                             ref_html = (
-                                f'<span style="font-size:11px;color:#888;'
-                                f'font-family:monospace;background:#eee;'
+                                f'<span style="font-size:11px;color:#8A9488;'
+                                f'font-family:monospace;background:#DDD5C2;'
                                 f'padding:1px 6px;border-radius:4px;'
                                 f'margin-right:6px;white-space:nowrap;">'
                                 f'{ref}</span>'
@@ -2143,7 +2161,7 @@ def main():
                             )
 
                             st.markdown(
-                                f'<div style="background:#f5f5f5;'
+                                f'<div style="background:#EDE7D8;'
                                 f'padding:12px;border-radius:8px;'
                                 f'margin:8px 0;border-left:4px solid '
                                 f'{clr};">'
@@ -2151,7 +2169,7 @@ def main():
                                 f'justify-content:space-between;'
                                 f'align-items:flex-start;gap:12px;">'
                                 f'<span style="font-size:13px;'
-                                f'color:#1a1a1a;flex:1;">'
+                                f'color:#152018;flex:1;">'
                                 f'{ref_html}{req_text}</span>'
                                 f'<span class="{badge_class}" '
                                 f'style="white-space:nowrap;">'
@@ -2159,7 +2177,7 @@ def main():
                                 f'</div>'
                                 f'{extracts_section}'
                                 f'<p style="margin:8px 0 0 0;'
-                                f'font-size:12px;color:#222222;">'
+                                f'font-size:12px;color:#152018;">'
                                 f'<strong>Rationale:</strong> '
                                 f'{r.get("rationale", "")}</p>'
                                 f'</div>',
@@ -2192,8 +2210,8 @@ def main():
         if secrets_key:
             cmp_api_key = secrets_key
             st.markdown(
-                '<div style="background:#dcfce7;border:1px solid #bbf7d0;'
-                'border-radius:8px;padding:10px;font-size:13px;color:#166534;">'
+                '<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
+                'border-radius:8px;padding:10px;font-size:13px;color:#1C6B4A;">'
                 '✓ API key configured</div>',
                 unsafe_allow_html=True
             )
@@ -2407,22 +2425,22 @@ def main():
             st.subheader("Comparison Results")
 
             st.markdown(
-                '<div style="background:#f5f5f5;border:1px solid #e0e0e0;'
+                '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
                 'border-radius:8px;padding:16px;margin-bottom:16px;">'
-                '<h4 style="margin:0 0 12px 0;color:#1a1a1a;">'
+                '<h4 style="margin:0 0 12px 0;color:#152018;">'
                 'Coverage Summary</h4>'
                 '<table style="width:100%;border-collapse:collapse;'
                 'font-size:13px;">'
-                '<tr style="border-bottom:2px solid #e0e0e0;">'
-                '<th style="text-align:left;padding:6px;color:#1a1a1a;">'
+                '<tr style="border-bottom:2px solid #DDD5C2;">'
+                '<th style="text-align:left;padding:6px;color:#152018;">'
                 'Framework</th>'
-                f'<th style="text-align:center;padding:6px;color:#1a1a1a;"'
+                f'<th style="text-align:center;padding:6px;color:#152018;"'
                 f' colspan="3">{name_a}</th>'
-                f'<th style="text-align:center;padding:6px;color:#1a1a1a;"'
+                f'<th style="text-align:center;padding:6px;color:#152018;"'
                 f' colspan="3">{name_b}</th>'
                 '</tr>'
-                '<tr style="border-bottom:1px solid #e0e0e0;'
-                'font-size:11px;color:#888;">'
+                '<tr style="border-bottom:1px solid #DDD5C2;'
+                'font-size:11px;color:#8A9488;">'
                 '<td></td>'
                 '<td style="text-align:center;padding:4px;">Covered</td>'
                 '<td style="text-align:center;padding:4px;">Partly</td>'
@@ -2439,26 +2457,26 @@ def main():
                 sa = summaries_a.get(fw, {}).get("counts", {})
                 sb = summaries_b.get(fw, {}).get("counts", {})
                 table_rows += (
-                    '<tr style="border-bottom:1px solid #f0f0f0;">'
+                    '<tr style="border-bottom:1px solid #E9E3D3;">'
                     f'<td style="padding:6px;font-weight:600;'
-                    f'color:#1a1a1a;">{fw}</td>'
+                    f'color:#152018;">{fw}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#dcfce7;color:#166534;">'
+                    f'background:#E8F2EA;color:#1C6B4A;">'
                     f'{sa.get(CLASSIFICATION_COVERS, 0)}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#fef3c7;color:#92400e;">'
+                    f'background:#FBF0D8;color:#B07A18;">'
                     f'{sa.get(CLASSIFICATION_PARTLY, 0)}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#fee2e2;color:#991b1b;">'
+                    f'background:#F8E3DD;color:#B4472F;">'
                     f'{sa.get(CLASSIFICATION_DOESNT, 0)}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#dcfce7;color:#166534;">'
+                    f'background:#E8F2EA;color:#1C6B4A;">'
                     f'{sb.get(CLASSIFICATION_COVERS, 0)}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#fef3c7;color:#92400e;">'
+                    f'background:#FBF0D8;color:#B07A18;">'
                     f'{sb.get(CLASSIFICATION_PARTLY, 0)}</td>'
                     f'<td style="text-align:center;padding:6px;'
-                    f'background:#fee2e2;color:#991b1b;">'
+                    f'background:#F8E3DD;color:#B4472F;">'
                     f'{sb.get(CLASSIFICATION_DOESNT, 0)}</td>'
                     '</tr>'
                 )
@@ -2536,23 +2554,23 @@ def main():
                                 req_text = req_text[:180] + "\u2026"
 
                             st.markdown(
-                                f'<div style="background:#f5f5f5;'
+                                f'<div style="background:#EDE7D8;'
                                 f'padding:12px;border-radius:8px;'
                                 f'margin:8px 0;">'
                                 f'<p style="margin:0 0 8px 0;'
-                                f'font-size:13px;color:#1a1a1a;">'
+                                f'font-size:13px;color:#152018;">'
                                 f'{req_text}</p>'
                                 f'<div style="display:flex;gap:16px;'
                                 f'align-items:center;flex-wrap:wrap;">'
                                 f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#888;'
+                                f'<span style="font-size:11px;color:#8A9488;'
                                 f'text-transform:uppercase;">'
                                 f'{name_a}</span><br>'
                                 f'<span class="{badge_a}">'
                                 f'{class_a}</span>'
                                 f'</div>'
                                 f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#888;'
+                                f'<span style="font-size:11px;color:#8A9488;'
                                 f'text-transform:uppercase;">'
                                 f'{name_b}</span><br>'
                                 f'<span class="{badge_b}">'
