@@ -237,6 +237,22 @@ FRAMEWORK_FULL_NAMES = {
     "PSI": "Principles for Sustainable Insurance"
 }
 
+FRAMEWORK_URLS = {
+    "TCFD": "https://www.fsb-tcfd.org/",
+    "TNFD": "https://tnfd.global/",
+    "PRA": "https://www.bankofengland.co.uk/prudential-regulation/publication/2019/enhancing-banks-and-insurers-approaches-to-managing-the-financial-risks-from-climate-change-ss",
+    "IFRS S1": "https://www.ifrs.org/issued-standards/ifrs-sustainability-standards-navigator/ifrs-s1-general-requirements/",
+    "IFRS S2": "https://www.ifrs.org/issued-standards/ifrs-sustainability-standards-navigator/ifrs-s2-climate-related-disclosures/",
+    "TPT": "https://transitiontaskforce.net/",
+    "BMA": "https://www.bma.bm/",
+    "MAS": "https://www.mas.gov.sg/regulation/guidelines/guidelines-on-environmental-risk-management",
+    "ESRS E1": "https://www.efrag.org/en/sustainability-reporting/esrs-workstreams/esrs-e1-climate-change",
+    "ESRS E4": "https://www.efrag.org/en/sustainability-reporting/esrs-workstreams/esrs-e4-biodiversity-and-ecosystems",
+    "OSFI": "https://www.osfi-bsif.gc.ca/en/guidance/guidance-library/climate-risk-management",
+    "SBTi": "https://sciencebasedtargets.org/",
+    "PSI": "https://www.unepfi.org/insurance/insurance/",
+}
+
 ADOPTION_DICT = {
     "TCFD": ["Canada", "France", "Germany", "Italy", "Japan", "United Kingdom", "USA", "New Zealand", "Switzerland", "Singapore", "Brazil", "China", "South Africa"],
     "TNFD": ["Brazil", "China", "Colombia", "Costa Rica", "Egypt", "India", "Indonesia", "Kenya", "Malaysia", "Mexico", "Morocco", "Nigeria", "Peru", "Philippines", "South Africa"],
@@ -372,7 +388,9 @@ def load_similarity_data():
 def load_framework_requirements():
     """
     Load framework requirements from ReportingFrameworks_v1.xlsx.
-    Returns a dict: { framework: { topic: [recommendation_1, ...] } }
+    Returns a tuple:
+      - requirements: { framework: { topic: [recommendation_1, ...] } }
+      - references:   { (framework, recommendation): reference_string }
     Recommendations are deduplicated per framework+topic.
     """
     import os
@@ -395,14 +413,16 @@ def load_framework_requirements():
             "Could not find ReportingFrameworks_v1.xlsx. "
             "Please ensure the file is in the same directory as this script."
         )
-        return {}
+        return {}, {}
 
     requirements = defaultdict(lambda: defaultdict(list))
+    references = {}
 
     for _, row in df.iterrows():
         framework = row.get("Framework")
         topic = row.get("Topic")
         recommendation = row.get("Recommendation")
+        reference = row.get("Reference")
 
         if pd.isna(framework) or pd.isna(topic) or pd.isna(recommendation):
             continue
@@ -415,8 +435,15 @@ def load_framework_requirements():
         if recommendation not in requirements[framework][topic]:
             requirements[framework][topic].append(recommendation)
 
+        # Store source reference (e.g. "IFRS S2 6", "TCFD Governance A")
+        if not pd.isna(reference):
+            references[(framework, recommendation)] = str(reference).strip()
+
     # Convert defaultdicts to regular dicts for caching
-    return {fw: dict(topics) for fw, topics in requirements.items()}
+    return (
+        {fw: dict(topics) for fw, topics in requirements.items()},
+        references,
+    )
 
 
 # ============================================
@@ -472,7 +499,7 @@ def extract_text_from_pdf(pdf_file):
     return text_list
 
 
-def claude_analyze_report(report_text, selected_frameworks, api_key, framework_requirements, progress_bar=None):
+def claude_analyze_report(report_text, selected_frameworks, api_key, framework_requirements, progress_bar=None, requirement_refs=None):
     """
     Use Claude to assess a report requirement-by-requirement.
 
@@ -573,6 +600,7 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
         # --- Build the prompt for all requirements in this framework ---
         def _build_prompt(topic_reqs_dict):
             """Build requirements prompt from a {topic: [reqs]} dict."""
+            refs = requirement_refs or {}
             prompt = (
                 f"Assess the report against each requirement of the "
                 f"**{fw_full_name} ({framework})** framework.\n\n"
@@ -582,12 +610,15 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
             idx = 1
             for t, reqs_list in topic_reqs_dict.items():
                 for req in reqs_list:
-                    prompt += f"{idx}. [{t}] {req}\n"
+                    ref = refs.get((framework, req), "")
+                    ref_tag = f" (Source: {ref})" if ref else ""
+                    prompt += f"{idx}. [{t}]{ref_tag} {req}\n"
                     idx += 1
             prompt += (
                 "\n\nRespond ONLY with a JSON array. Each element must have exactly these keys:\n"
                 "{\n"
                 ' "topic": "<topic name from the square brackets>",\n'
+                ' "reference": "<the Source reference exactly as given, or empty string if none>",\n'
                 ' "requirement": "<the requirement text>",\n'
                 ' "relevant_extracts": ["<short verbatim quote 1 from report>", "<quote 2>", ...],\n'
                 ' "classification": "<one of: Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",\n'
@@ -698,6 +729,7 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
                 results.append({
                     "framework": framework,
                     "topic": item["topic"],
+                    "reference": item.get("reference", ""),
                     "requirement": item.get("requirement", ""),
                     "relevant_extracts": item.get("relevant_extracts", []),
                     "classification": classification,
@@ -828,7 +860,7 @@ def generate_results_excel(results, framework_summaries):
 
     # --- Sheet 2: Detailed Results ---
     ws_detail = wb.create_sheet("Detailed Results")
-    detail_headers = ["Framework", "Topic", "Requirement", "Classification", "Rationale", "Relevant Extracts"]
+    detail_headers = ["Framework", "Topic", "Reference", "Requirement", "Classification", "Rationale", "Relevant Extracts"]
     for col, h in enumerate(detail_headers, 1):
         cell = ws_detail.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -839,11 +871,12 @@ def generate_results_excel(results, framework_summaries):
     for i, r in enumerate(results, 2):
         ws_detail.cell(row=i, column=1, value=r["framework"]).border = thin_border
         ws_detail.cell(row=i, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
-        req_cell = ws_detail.cell(row=i, column=3, value=r["requirement"])
+        ws_detail.cell(row=i, column=3, value=r.get("reference", "")).border = thin_border
+        req_cell = ws_detail.cell(row=i, column=4, value=r["requirement"])
         req_cell.alignment = Alignment(wrap_text=True)
         req_cell.border = thin_border
 
-        class_cell = ws_detail.cell(row=i, column=4, value=r["classification"])
+        class_cell = ws_detail.cell(row=i, column=5, value=r["classification"])
         if r["classification"] == CLASSIFICATION_COVERS:
             class_cell.fill = green_fill
         elif r["classification"] == CLASSIFICATION_PARTLY:
@@ -852,22 +885,23 @@ def generate_results_excel(results, framework_summaries):
             class_cell.fill = red_fill
         class_cell.border = thin_border
 
-        ws_detail.cell(row=i, column=5, value=r.get("rationale", "")).border = thin_border
+        ws_detail.cell(row=i, column=6, value=r.get("rationale", "")).border = thin_border
         ws_detail.cell(
-            row=i, column=6,
+            row=i, column=7,
             value="; ".join(r.get("relevant_extracts", []))
         ).border = thin_border
 
     ws_detail.column_dimensions["A"].width = 14
     ws_detail.column_dimensions["B"].width = 18
-    ws_detail.column_dimensions["C"].width = 50
-    ws_detail.column_dimensions["D"].width = 26
-    ws_detail.column_dimensions["E"].width = 50
+    ws_detail.column_dimensions["C"].width = 18
+    ws_detail.column_dimensions["D"].width = 50
+    ws_detail.column_dimensions["E"].width = 26
     ws_detail.column_dimensions["F"].width = 50
+    ws_detail.column_dimensions["G"].width = 50
 
     # --- Sheet 3: Gap Analysis ---
     ws_gap = wb.create_sheet("Gap Analysis")
-    gap_headers = ["Framework", "Topic", "Requirement", "Classification", "Rationale"]
+    gap_headers = ["Framework", "Topic", "Reference", "Requirement", "Classification", "Rationale"]
     for col, h in enumerate(gap_headers, 1):
         cell = ws_gap.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -880,18 +914,20 @@ def generate_results_excel(results, framework_summaries):
         if r["classification"] != CLASSIFICATION_COVERS:
             ws_gap.cell(row=gap_row, column=1, value=r["framework"]).border = thin_border
             ws_gap.cell(row=gap_row, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
-            ws_gap.cell(row=gap_row, column=3, value=r["requirement"]).border = thin_border
-            class_cell = ws_gap.cell(row=gap_row, column=4, value=r["classification"])
+            ws_gap.cell(row=gap_row, column=3, value=r.get("reference", "")).border = thin_border
+            ws_gap.cell(row=gap_row, column=4, value=r["requirement"]).border = thin_border
+            class_cell = ws_gap.cell(row=gap_row, column=5, value=r["classification"])
             class_cell.fill = amber_fill if r["classification"] == CLASSIFICATION_PARTLY else red_fill
             class_cell.border = thin_border
-            ws_gap.cell(row=gap_row, column=5, value=r.get("rationale", "")).border = thin_border
+            ws_gap.cell(row=gap_row, column=6, value=r.get("rationale", "")).border = thin_border
             gap_row += 1
 
     ws_gap.column_dimensions["A"].width = 14
     ws_gap.column_dimensions["B"].width = 18
-    ws_gap.column_dimensions["C"].width = 50
-    ws_gap.column_dimensions["D"].width = 26
-    ws_gap.column_dimensions["E"].width = 50
+    ws_gap.column_dimensions["C"].width = 18
+    ws_gap.column_dimensions["D"].width = 50
+    ws_gap.column_dimensions["E"].width = 26
+    ws_gap.column_dimensions["F"].width = 50
 
     output = BytesIO()
     wb.save(output)
@@ -940,11 +976,13 @@ def render_gap_analysis(results, framework_summaries):
                     req_text = r["requirement"]
                     if len(req_text) > 200:
                         req_text = req_text[:200] + "…"
+                    ref = r.get("reference", "")
+                    ref_str = f" · {ref}" if ref else ""
                     st.markdown(
                         f'<div style="background:#fee2e2;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #dc2626;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
-                        f'<strong>[{prettify_topic_name(r["topic"])}]</strong> {req_text}</p>'
+                        f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
                         f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
@@ -956,11 +994,13 @@ def render_gap_analysis(results, framework_summaries):
                     req_text = r["requirement"]
                     if len(req_text) > 200:
                         req_text = req_text[:200] + "…"
+                    ref = r.get("reference", "")
+                    ref_str = f" · {ref}" if ref else ""
                     st.markdown(
                         f'<div style="background:#fef3c7;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #d97706;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#1a1a1a;">'
-                        f'<strong>[{prettify_topic_name(r["topic"])}]</strong> {req_text}</p>'
+                        f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
                         f'<p style="margin:0;font-size:12px;color:#555;">{r.get("rationale", "")}</p>'
                         f'</div>',
                         unsafe_allow_html=True
@@ -1057,29 +1097,49 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
 # REQUIREMENT-LEVEL DIFF FOR SIMILARITY VIEW
 # ============================================
 
+# Canonical topic names — the Excel contains inconsistent casings
+# (e.g. 'Metricsandtargets', 'MetricsandTargets', 'Metrics and Targets')
+_TOPIC_CANONICAL = {
+    "metricsandtargets": "Metrics and Targets",
+    "riskmanagement": "Risk Management",
+    "generalrequirements": "General Requirements",
+    "materialityassessment": "Materiality Assessment",
+    "scenarioanalysis": "Scenario Analysis",
+}
+
+
 def prettify_topic_name(name):
-    """Insert spaces into concatenated topic names like 'RiskManagement' -> 'Risk Management'."""
+    """Normalise topic names like 'RiskManagement' or 'Metricsandtargets' -> 'Risk Management' / 'Metrics and Targets'."""
     import re
-    # Handle "and" between words first: "MetricsandTargets" -> "Metrics and Targets"
-    spaced = re.sub(r'([a-z])(and)([A-Z])', r'\1 \2 \3', name)
-    # Then insert space before uppercase letters that follow lowercase
+    key = re.sub(r'[\s_\-]+', '', str(name)).lower()
+    if key in _TOPIC_CANONICAL:
+        return _TOPIC_CANONICAL[key]
+    # Fallback: handle "and" between words, then camelCase
+    spaced = re.sub(r'([a-z])(and)([A-Z])', r'\1 \2 \3', str(name))
     spaced = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', spaced)
     return spaced
 
 
-def compute_requirement_diffs(fw_a, fw_b, framework_requirements):
+def topic_match_key(name):
+    """Key for matching topics across frameworks regardless of casing/spacing."""
+    import re
+    return re.sub(r'[\s_\-]+', '', str(name)).lower()
+
+
+def compute_requirement_diffs(fw_a, fw_b, framework_requirements, requirement_refs=None):
     """
     Compare requirements between two frameworks for overlapping topics.
-    Returns a list of dicts with topic, req_a, req_b, and diff HTML.
+    Returns a list of dicts with topic, req_a, req_b, ref_a, ref_b.
     """
     import difflib
 
+    refs = requirement_refs or {}
     reqs_a = framework_requirements.get(fw_a, {})
     reqs_b = framework_requirements.get(fw_b, {})
 
-    # Find overlapping topic names (case-insensitive match)
-    topics_a = {t.lower(): t for t in reqs_a}
-    topics_b = {t.lower(): t for t in reqs_b}
+    # Find overlapping topic names (canonicalised: casing/spacing-insensitive)
+    topics_a = {topic_match_key(t): t for t in reqs_a}
+    topics_b = {topic_match_key(t): t for t in reqs_b}
     common_topics = set(topics_a.keys()) & set(topics_b.keys())
 
     comparisons = []
@@ -1097,6 +1157,8 @@ def compute_requirement_diffs(fw_a, fw_b, framework_requirements):
                 "topic": topic_a,
                 "req_a": req_a_text,
                 "req_b": req_b_text,
+                "ref_a": refs.get((fw_a, req_a_text), "") if req_a_text else "",
+                "ref_b": refs.get((fw_b, req_b_text), "") if req_b_text else "",
             })
 
     return comparisons
@@ -1121,7 +1183,18 @@ def render_diff_html(text_a, text_b):
 
     words_a = text_a.split()
     words_b = text_b.split()
-    sm = difflib.SequenceMatcher(None, words_a, words_b)
+
+    # Compare on normalised tokens (lowercase, punctuation stripped) so that
+    # trivial case/punctuation differences aren't highlighted — only
+    # substantive word changes are.
+    import re as _re
+
+    def _norm(w):
+        return _re.sub(r'[^\w]', '', w).lower()
+
+    norm_a = [_norm(w) for w in words_a]
+    norm_b = [_norm(w) for w in words_b]
+    sm = difflib.SequenceMatcher(None, norm_a, norm_b)
 
     html_a_parts = []
     html_b_parts = []
@@ -1162,8 +1235,8 @@ def main():
     st.title("Sustainability Framework Analyser")
     st.markdown("Compare & analyse ESG reporting frameworks")
 
-    # Load requirements from Excel once
-    framework_requirements = load_framework_requirements()
+    # Load requirements + source references from Excel once
+    framework_requirements, requirement_refs = load_framework_requirements()
 
     # Load similarity CSVs
     similarity_data = load_similarity_data()
@@ -1337,15 +1410,28 @@ def main():
 
         with legend_col:
             st.markdown("#### Framework Legend")
+            st.caption(
+                "(n) = number of adopting jurisdictions. "
+                "Click a name to visit the official source. "
+                "Hover for the full framework name."
+            )
             for fw, color in FRAMEWORK_COLORS.items():
                 full_name = FRAMEWORK_FULL_NAMES.get(fw, fw)
                 count = len(ADOPTION_DICT.get(fw, []))
+                fw_url = FRAMEWORK_URLS.get(fw, "")
+                name_html = (
+                    f'<a href="{fw_url}" target="_blank" '
+                    f'style="color:#1a1a1a;font-size:13px;'
+                    f'text-decoration:underline;text-decoration-color:#ccc;">{fw}</a>'
+                    if fw_url else
+                    f'<span style="color:#1a1a1a;font-size:13px;">{fw}</span>'
+                )
                 st.markdown(
                     f'<div style="display:flex;align-items:center;gap:8px;'
                     f'margin:4px 0;" title="{full_name}">'
                     f'<div style="width:14px;height:14px;background:{color};'
                     f'border-radius:3px;flex-shrink:0;"></div>'
-                    f'<span style="color:#1a1a1a;font-size:13px;">{fw}</span>'
+                    f'{name_html}'
                     f'<span style="color:#888888;font-size:12px;">({count})</span>'
                     f'</div>',
                     unsafe_allow_html=True
@@ -1371,6 +1457,20 @@ def main():
                     f"*{FRAMEWORK_FULL_NAMES.get(selected_framework, selected_framework)}"
                     f" · Metric: {metric_type.replace('_', ' ').title()}*"
                 )
+                with st.expander("ℹ️ How are these scores calculated?"):
+                    st.markdown(
+                        "**Similarity scores** are computed by converting each framework's "
+                        "requirement texts into sentence embeddings (numerical vectors capturing "
+                        "meaning) and measuring the cosine similarity between frameworks. "
+                        "A higher percentage means the two frameworks ask for more semantically "
+                        "similar things.\n\n"
+                        "**Metric Type** filters which *dimension* of the pre-computed similarity "
+                        "is shown (e.g. 'Risk' compares only risk-related content). The topic "
+                        "headings you see inside the requirement-level comparison (Governance, "
+                        "Strategy, Risk Management, Metrics and Targets, ...) come from each "
+                        "framework's *own document structure*, so they are related to but not "
+                        "identical to the Metric Type filter."
+                    )
 
                 df_sim = similarity_data.get(metric_type)
                 if df_sim is None:
@@ -1422,50 +1522,77 @@ def main():
                             unsafe_allow_html=True
                         )
 
-                        # Expandable requirement-level comparison
-                        comparisons = compute_requirement_diffs(
-                            selected_framework, other_fw, framework_requirements
-                        )
-                        if comparisons:
-                            with st.expander(
-                                f"View requirement-level comparison: "
-                                f"{selected_framework} vs {other_fw} "
-                                f"({len(comparisons)} requirement pairs)"
-                            ):
-                                current_topic = None
-                                for comp in comparisons:
-                                    if comp["topic"] != current_topic:
-                                        current_topic = comp["topic"]
-                                        st.markdown(f"**{prettify_topic_name(current_topic)}**")
+                        # Expandable requirement-level comparison.
+                        # Similarity data may use parent names (ESRS, IFRS) while
+                        # requirements use split names (ESRS E1/E4, IFRS S1/S2) —
+                        # resolve to every matching split.
+                        if other_fw in framework_requirements:
+                            diff_targets = [other_fw]
+                        else:
+                            diff_targets = [
+                                split for split, parent in SIMILARITY_PARENT_MAP.items()
+                                if parent == other_fw
+                                and split in framework_requirements
+                            ]
 
-                                    html_a, html_b = render_diff_html(
-                                        comp["req_a"], comp["req_b"]
-                                    )
+                        for diff_fw in diff_targets:
+                            comparisons = compute_requirement_diffs(
+                                selected_framework, diff_fw,
+                                framework_requirements, requirement_refs
+                            )
+                            if comparisons:
+                                with st.expander(
+                                    f"View requirement-level comparison: "
+                                    f"{selected_framework} vs {diff_fw} "
+                                    f"({len(comparisons)} requirement pairs)"
+                                ):
+                                    current_topic = None
+                                    for comp in comparisons:
+                                        if comp["topic"] != current_topic:
+                                            current_topic = comp["topic"]
+                                            st.markdown(f"**{prettify_topic_name(current_topic)}**")
 
-                                    fw_sel_color = FRAMEWORK_COLORS.get(
-                                        selected_framework, "#888"
-                                    )
-                                    st.markdown(
-                                        f'<div style="display:flex;gap:12px;'
-                                        f'margin:6px 0;font-size:12px;'
-                                        f'line-height:1.5;">'
-                                        f'<div style="flex:1;background:#f0f7ff;'
-                                        f'padding:8px;border-radius:6px;'
-                                        f'border-left:3px solid {fw_sel_color};">'
-                                        f'<strong style="color:#1a1a1a;">'
-                                        f'{selected_framework}</strong>'
-                                        f'<br><span style="color:#333;">'
-                                        f'{html_a}</span></div>'
-                                        f'<div style="flex:1;background:#f0fff4;'
-                                        f'padding:8px;border-radius:6px;'
-                                        f'border-left:3px solid {fw_color};">'
-                                        f'<strong style="color:#1a1a1a;">'
-                                        f'{other_fw}</strong>'
-                                        f'<br><span style="color:#333;">'
-                                        f'{html_b}</span></div>'
-                                        f'</div>',
-                                        unsafe_allow_html=True
-                                    )
+                                        html_a, html_b = render_diff_html(
+                                            comp["req_a"], comp["req_b"]
+                                        )
+                                        ref_a_html = (
+                                            f' <span style="font-size:10px;color:#888;'
+                                            f'font-family:monospace;">({comp["ref_a"]})</span>'
+                                            if comp.get("ref_a") else ""
+                                        )
+                                        ref_b_html = (
+                                            f' <span style="font-size:10px;color:#888;'
+                                            f'font-family:monospace;">({comp["ref_b"]})</span>'
+                                            if comp.get("ref_b") else ""
+                                        )
+
+                                        fw_sel_color = FRAMEWORK_COLORS.get(
+                                            selected_framework, "#888"
+                                        )
+                                        diff_fw_color = FRAMEWORK_COLORS.get(
+                                            diff_fw, fw_color
+                                        )
+                                        st.markdown(
+                                            f'<div style="display:flex;gap:12px;'
+                                            f'margin:6px 0;font-size:12px;'
+                                            f'line-height:1.5;">'
+                                            f'<div style="flex:1;background:#f0f7ff;'
+                                            f'padding:8px;border-radius:6px;'
+                                            f'border-left:3px solid {fw_sel_color};">'
+                                            f'<strong style="color:#1a1a1a;">'
+                                            f'{selected_framework}</strong>{ref_a_html}'
+                                            f'<br><span style="color:#333;">'
+                                            f'{html_a}</span></div>'
+                                            f'<div style="flex:1;background:#f0fff4;'
+                                            f'padding:8px;border-radius:6px;'
+                                            f'border-left:3px solid {diff_fw_color};">'
+                                            f'<strong style="color:#1a1a1a;">'
+                                            f'{diff_fw}</strong>{ref_b_html}'
+                                            f'<br><span style="color:#333;">'
+                                            f'{html_b}</span></div>'
+                                            f'</div>',
+                                            unsafe_allow_html=True
+                                        )
                 else:
                     st.info(
                         f"No similarity data available for "
@@ -1773,7 +1900,8 @@ def main():
                     results, framework_summaries, token_usage = (
                         claude_analyze_report(
                             report_text, selected_frameworks,
-                            api_key, framework_requirements, progress_bar
+                            api_key, framework_requirements, progress_bar,
+                            requirement_refs
                         )
                     )
                     st.session_state.analysis_results = results
@@ -2004,6 +2132,16 @@ def main():
                             if len(req_text) > 200:
                                 req_text = req_text[:200] + "\u2026"
 
+                            ref = r.get("reference", "")
+                            ref_html = (
+                                f'<span style="font-size:11px;color:#888;'
+                                f'font-family:monospace;background:#eee;'
+                                f'padding:1px 6px;border-radius:4px;'
+                                f'margin-right:6px;white-space:nowrap;">'
+                                f'{ref}</span>'
+                                if ref else ""
+                            )
+
                             st.markdown(
                                 f'<div style="background:#f5f5f5;'
                                 f'padding:12px;border-radius:8px;'
@@ -2014,7 +2152,7 @@ def main():
                                 f'align-items:flex-start;gap:12px;">'
                                 f'<span style="font-size:13px;'
                                 f'color:#1a1a1a;flex:1;">'
-                                f'{req_text}</span>'
+                                f'{ref_html}{req_text}</span>'
                                 f'<span class="{badge_class}" '
                                 f'style="white-space:nowrap;">'
                                 f'{classification}</span>'
@@ -2220,7 +2358,8 @@ def main():
                     results_a, summaries_a, usage_a = (
                         claude_analyze_report(
                             report_a, cmp_selected, cmp_api_key,
-                            framework_requirements, progress_a
+                            framework_requirements, progress_a,
+                            requirement_refs
                         )
                     )
                 except Exception as e:
@@ -2233,7 +2372,8 @@ def main():
                     results_b, summaries_b, usage_b = (
                         claude_analyze_report(
                             report_b, cmp_selected, cmp_api_key,
-                            framework_requirements, progress_b
+                            framework_requirements, progress_b,
+                            requirement_refs
                         )
                     )
                 except Exception as e:
