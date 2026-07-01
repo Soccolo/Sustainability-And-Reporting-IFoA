@@ -199,6 +199,18 @@ st.markdown("""
         background-color: #F8E3DD; color: #B4472F !important;
         padding: 4px 12px; border-radius: 12px; font-weight: 600; font-size: 13px;
     }
+    /* ===== Dark panels keep light text ===== */
+    .stMarkdown .terra-dark-card, .stMarkdown .terra-dark-card p,
+    .stMarkdown .terra-dark-card span, .stMarkdown .terra-dark-card div,
+    .stMarkdown .terra-dark-card strong,
+    .terra-dark-card p, .terra-dark-card span, .terra-dark-card strong {
+        color: #E8EFE8 !important;
+    }
+    .stMarkdown .terra-dark-card .t-strong,
+    .terra-dark-card .t-strong { color: #FCFAF3 !important; }
+    .stMarkdown .terra-dark-card .t-soft,
+    .terra-dark-card .t-soft { color: #9FBAA8 !important; }
+
     /* ===== Terra typography & polish ===== */
     html, body, .stApp, .stMarkdown, .stButton > button, input, textarea, [data-baseweb="select"] span {
         font-family: 'Hanken Grotesk', sans-serif;
@@ -2053,14 +2065,14 @@ def main():
                 ) / total_results * 100
             ) if total_results else 0.0
             best_note = (
-                f'Best alignment with <strong style="color:#FCFAF3 !important;">'
+                f'Best alignment with <strong class="t-strong">'
                 f'{best_fw[0]}</strong>.'
                 if best_fw else ''
             )
             donut_html = (
                 f'<div style="display:grid;grid-template-columns:auto 1fr 1fr 1fr;'
                 f'gap:14px;margin-bottom:16px;align-items:stretch;">'
-                f'<div style="background:#0F3D2A;border-radius:14px;'
+                f'<div class="terra-dark-card" style="background:#0F3D2A;border-radius:14px;'
                 f'padding:22px 26px;display:flex;align-items:center;gap:20px;'
                 f'min-width:330px;">'
                 f'<div style="width:104px;height:104px;border-radius:50%;'
@@ -2070,17 +2082,19 @@ def main():
                 f'<div style="width:76px;height:76px;border-radius:50%;'
                 f'background:#0F3D2A;display:flex;flex-direction:column;'
                 f'align-items:center;justify-content:center;">'
-                f'<span style="font-family:\'Spectral\',serif;font-size:26px;'
-                f'font-weight:600;color:#FCFAF3 !important;line-height:1;">'
+                f'<span class="t-strong" style="font-family:\'Spectral\',serif;'
+                f'font-size:26px;font-weight:600;color:#FCFAF3;line-height:1;">'
                 f'{overall_pct:.0f}%</span>'
-                f'<span style="font-size:9px;color:#9FBAA8 !important;'
+                f'<span class="t-soft" style="font-size:9px;color:#9FBAA8;'
                 f'letter-spacing:.05em;">OVERALL</span>'
                 f'</div></div>'
-                f'<div><p style="margin:0 0 4px;font-size:13px;color:#9FBAA8 !important;">'
+                f'<div><p class="t-soft" style="margin:0 0 4px;font-size:13px;'
+                f'color:#9FBAA8;">'
                 f'Weighted coverage</p>'
-                f'<p style="margin:0;font-size:13.5px;line-height:1.5;'
-                f'color:#FCFAF3 !important;">Analysed <strong>{num_pages}</strong> pages '
-                f'against <strong>{len(framework_summaries)}</strong> frameworks '
+                f'<p class="t-strong" style="margin:0;font-size:13.5px;'
+                f'line-height:1.5;color:#FCFAF3;">Analysed '
+                f'<strong class="t-strong">{num_pages}</strong> pages '
+                f'against <strong class="t-strong">{len(framework_summaries)}</strong> frameworks '
                 f'({total_results} requirements). {best_note}</p>'
                 f'</div></div>'
                 f'<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
