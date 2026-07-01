@@ -1285,49 +1285,50 @@ def main():
             f'{fw}</span>'
             for fw, color in FRAMEWORK_COLORS.items()
         )
-        st.markdown(
-            f'''
+        hero_left, hero_right = st.columns([1.05, 0.95], gap="large")
+        with hero_left:
+            st.markdown(
+                f'''
 <div style="padding:26px 0 6px;">
-  <div style="display:inline-flex;align-items:center;gap:8px;background:#E8F2EA;
-    border:1px solid #C6E0CC;border-radius:20px;padding:6px 14px;font-size:13px;
-    font-weight:600;color:#1C6B4A;margin-bottom:22px;">
-    <span style="width:7px;height:7px;border-radius:50%;background:#1C6B4A;
-      display:inline-block;"></span>
-    AI-assisted &middot; requirement-level analysis
+  <div style="display:inline-flex;align-items:center;gap:8px;background:#E8F2EA;border:1px solid #C6E0CC;border-radius:20px;padding:6px 14px;font-size:13px;font-weight:600;color:#1C6B4A;margin-bottom:22px;"><span style="width:7px;height:7px;border-radius:50%;background:#1C6B4A;display:inline-block;"></span> AI-assisted &middot; requirement-level analysis</div>
+  <h1 style="font-family:'Spectral',serif;font-weight:600;font-size:48px;line-height:1.06;letter-spacing:-0.01em;margin:0 0 18px;color:#152018;">Know exactly where your ESG report stands.</h1>
+  <p style="font-size:17px;line-height:1.6;color:#4B5A50;margin:0 0 28px;max-width:560px;">Upload a transition plan or sustainability report and see how it measures against <strong style="color:#152018;">{n_frameworks} global disclosure frameworks</strong> — assessed requirement by requirement, with the exact passages that support each finding.</p>
+  <div style="display:flex;gap:44px;">
+    <div><div style="font-family:'Spectral',serif;font-size:36px;font-weight:600;color:#0F3D2A;line-height:1;">{n_frameworks}</div><div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">frameworks tracked</div></div>
+    <div><div style="font-family:'Spectral',serif;font-size:36px;font-weight:600;color:#0F3D2A;line-height:1;">{n_countries}</div><div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">countries mapped</div></div>
+    <div><div style="font-family:'Spectral',serif;font-size:36px;font-weight:600;color:#0F3D2A;line-height:1;">{n_requirements}</div><div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">requirements assessed</div></div>
   </div>
-  <h1 style="font-family:'Spectral',serif;font-weight:600;font-size:52px;
-    line-height:1.06;letter-spacing:-0.01em;margin:0 0 18px;color:#152018;">
-    Know exactly where your ESG report stands.
-  </h1>
-  <p style="font-size:18px;line-height:1.6;color:#4B5A50;margin:0 0 30px;max-width:640px;">
-    Upload a transition plan or sustainability report and see how it measures against
-    <strong style="color:#152018;">{n_frameworks} global disclosure frameworks</strong> —
-    assessed requirement by requirement, with the exact passages that support each finding.
-  </p>
-  <div style="display:flex;gap:48px;margin:0 0 32px;">
-    <div>
-      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
-        color:#0F3D2A;line-height:1;">{n_frameworks}</div>
-      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">frameworks tracked</div>
-    </div>
-    <div>
-      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
-        color:#0F3D2A;line-height:1;">{n_countries}</div>
-      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">countries mapped</div>
-    </div>
-    <div>
-      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
-        color:#0F3D2A;line-height:1;">{n_requirements}</div>
-      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">requirements assessed</div>
-    </div>
-  </div>
-  <div style="margin:0 0 14px;">{chips_html}</div>
-  <p style="font-size:13px;color:#8A9488;margin:0 0 6px;">
-    Built by the <strong style="color:#4B5A50;">IFoA Sustainability and Reporting
-    Working Party</strong>.
-  </p>
 </div>
 ''',
+                unsafe_allow_html=True,
+            )
+        with hero_right:
+            st.markdown(
+                '''
+<div style="background:#FCFAF3;border:1px solid #DDD5C2;border-radius:16px;padding:24px;margin-top:26px;box-shadow:0 18px 40px -24px rgba(30,40,30,.35);">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;"><span style="font-weight:700;font-size:14px;color:#152018;">Coverage summary</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#8A9488;">example-report.pdf</span></div>
+  <div style="display:flex;align-items:center;gap:20px;margin-bottom:20px;">
+    <div style="width:96px;height:96px;border-radius:50%;background:conic-gradient(#1C6B4A 0 68%, #DDD5C2 68% 100%);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><div style="width:70px;height:70px;border-radius:50%;background:#FCFAF3;display:flex;flex-direction:column;align-items:center;justify-content:center;"><span style="font-family:'Spectral',serif;font-size:24px;font-weight:600;color:#1C6B4A;line-height:1;">68%</span><span style="font-size:9px;color:#8A9488;font-weight:500;">overall</span></div></div>
+    <div style="flex:1;">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px;"><span style="width:10px;height:10px;border-radius:3px;background:#1C6B4A;display:inline-block;"></span><span style="font-size:12.5px;color:#4B5A50;flex:1;">Covers</span><span style="font-weight:700;font-size:12.5px;color:#152018;">142</span></div>
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px;"><span style="width:10px;height:10px;border-radius:3px;background:#C98A2B;display:inline-block;"></span><span style="font-size:12.5px;color:#4B5A50;flex:1;">Partly</span><span style="font-weight:700;font-size:12.5px;color:#152018;">68</span></div>
+      <div style="display:flex;align-items:center;gap:9px;"><span style="width:10px;height:10px;border-radius:3px;background:#B4472F;display:inline-block;"></span><span style="font-size:12.5px;color:#4B5A50;flex:1;">Doesn't</span><span style="font-weight:700;font-size:12.5px;color:#152018;">31</span></div>
+    </div>
+  </div>
+  <div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span style="font-weight:600;color:#152018;">TCFD</span><span style="font-family:'IBM Plex Mono',monospace;color:#8A9488;">81%</span></div><div style="height:8px;border-radius:5px;background:#DDD5C2;overflow:hidden;display:flex;"><div style="width:81%;background:#1C6B4A;"></div></div></div>
+  <div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span style="font-weight:600;color:#152018;">IFRS S2</span><span style="font-family:'IBM Plex Mono',monospace;color:#8A9488;">72%</span></div><div style="height:8px;border-radius:5px;background:#DDD5C2;overflow:hidden;display:flex;"><div style="width:72%;background:#1C6B4A;"></div></div></div>
+  <div style="margin-bottom:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span style="font-weight:600;color:#152018;">TNFD</span><span style="font-family:'IBM Plex Mono',monospace;color:#8A9488;">54%</span></div><div style="height:8px;border-radius:5px;background:#DDD5C2;overflow:hidden;display:flex;"><div style="width:54%;background:#C98A2B;"></div></div></div>
+  <div><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span style="font-weight:600;color:#152018;">ESRS E1</span><span style="font-family:'IBM Plex Mono',monospace;color:#8A9488;">63%</span></div><div style="height:8px;border-radius:5px;background:#DDD5C2;overflow:hidden;display:flex;"><div style="width:63%;background:#1C6B4A;"></div></div></div>
+  <p style="margin:14px 0 0;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#8A9488;text-align:right;">example output</p>
+</div>
+''',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<div style="margin:10px 0 14px;">{chips_html}</div>'
+            f'<p style="font-size:13px;color:#8A9488;margin:0 0 6px;">Built by the '
+            f'<strong style="color:#4B5A50;">IFoA Sustainability and Reporting '
+            f'Working Party</strong>.</p>',
             unsafe_allow_html=True,
         )
 
@@ -2044,33 +2045,128 @@ def main():
                 if framework_summaries else None
             )
 
-            # Summary box
-            summary_html = (
-                '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
-                'border-radius:8px;padding:16px;margin-bottom:16px;">'
-                '<h4 style="margin:0 0 12px 0;color:#152018;">'
-                'Analysis Summary</h4>'
-                f'<p style="margin:0 0 8px 0;color:#3B4A40;">'
-                f'Analysed <strong>{num_pages}</strong> pages against '
-                f'<strong>{len(framework_summaries)}</strong> frameworks '
-                f'({total_results} requirements total).</p>'
-                f'<div style="display:flex;gap:12px;flex-wrap:wrap;'
-                f'margin:8px 0;">'
-                f'<span class="badge-covers">{covers_count} Covered</span>'
-                f'<span class="badge-partly">'
-                f'{partly_count} Partly covered</span>'
-                f'<span class="badge-doesnt">'
-                f'{doesnt_count} Not covered</span>'
+            # ── Coverage summary (donut + counts) ──
+            overall_pct = (
+                sum(
+                    classification_to_score(r["classification"])
+                    for r in results
+                ) / total_results * 100
+            ) if total_results else 0.0
+            best_note = (
+                f'Best alignment with <strong style="color:#FCFAF3;">'
+                f'{best_fw[0]}</strong>.'
+                if best_fw else ''
+            )
+            donut_html = (
+                f'<div style="display:grid;grid-template-columns:auto 1fr 1fr 1fr;'
+                f'gap:14px;margin-bottom:16px;align-items:stretch;">'
+                f'<div style="background:#0F3D2A;border-radius:14px;'
+                f'padding:22px 26px;display:flex;align-items:center;gap:20px;'
+                f'min-width:330px;">'
+                f'<div style="width:104px;height:104px;border-radius:50%;'
+                f'background:conic-gradient(#7FCB9E 0 {overall_pct:.1f}%, '
+                f'rgba(255,255,255,.16) {overall_pct:.1f}% 100%);display:flex;'
+                f'align-items:center;justify-content:center;flex-shrink:0;">'
+                f'<div style="width:76px;height:76px;border-radius:50%;'
+                f'background:#0F3D2A;display:flex;flex-direction:column;'
+                f'align-items:center;justify-content:center;">'
+                f'<span style="font-family:\'Spectral\',serif;font-size:26px;'
+                f'font-weight:600;color:#FCFAF3;line-height:1;">'
+                f'{overall_pct:.0f}%</span>'
+                f'<span style="font-size:9px;color:#9FBAA8;'
+                f'letter-spacing:.05em;">OVERALL</span>'
+                f'</div></div>'
+                f'<div><p style="margin:0 0 4px;font-size:13px;color:#9FBAA8;">'
+                f'Weighted coverage</p>'
+                f'<p style="margin:0;font-size:13.5px;line-height:1.5;'
+                f'color:#FCFAF3;">Analysed <strong>{num_pages}</strong> pages '
+                f'against <strong>{len(framework_summaries)}</strong> frameworks '
+                f'({total_results} requirements). {best_note}</p>'
+                f'</div></div>'
+                f'<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
+                f'border-radius:14px;padding:18px;">'
+                f'<div style="font-family:\'Spectral\',serif;font-size:34px;'
+                f'font-weight:600;color:#1C6B4A;line-height:1;">'
+                f'{covers_count}</div>'
+                f'<div style="font-weight:600;font-size:13px;color:#1C6B4A;'
+                f'margin-top:5px;">Covers</div>'
+                f'<div style="font-size:12px;color:#5B7A64;">fully addressed'
+                f'</div></div>'
+                f'<div style="background:#FBF0D8;border:1px solid #EBD6A3;'
+                f'border-radius:14px;padding:18px;">'
+                f'<div style="font-family:\'Spectral\',serif;font-size:34px;'
+                f'font-weight:600;color:#B07A18;line-height:1;">'
+                f'{partly_count}</div>'
+                f'<div style="font-weight:600;font-size:13px;color:#B07A18;'
+                f'margin-top:5px;">Partly covers</div>'
+                f'<div style="font-size:12px;color:#977322;">needs strengthening'
+                f'</div></div>'
+                f'<div style="background:#F8E3DD;border:1px solid #EEC2B4;'
+                f'border-radius:14px;padding:18px;">'
+                f'<div style="font-family:\'Spectral\',serif;font-size:34px;'
+                f'font-weight:600;color:#B4472F;line-height:1;">'
+                f'{doesnt_count}</div>'
+                f'<div style="font-weight:600;font-size:13px;color:#B4472F;'
+                f'margin-top:5px;">Doesn\'t cover</div>'
+                f'<div style="font-size:12px;color:#96543F;">action required'
+                f'</div></div>'
+                f'</div>'
+            )
+            st.markdown(donut_html, unsafe_allow_html=True)
+
+            # ── Coverage by framework (stacked bars) ──
+            bars_rows = ""
+            for fw, s in sorted(
+                framework_summaries.items(),
+                key=lambda x: -x[1]["avg_score"]
+            ):
+                cts = s.get("counts", {})
+                tot = s.get("total", 0) or 1
+                c_pct = cts.get(CLASSIFICATION_COVERS, 0) / tot * 100
+                p_pct = cts.get(CLASSIFICATION_PARTLY, 0) / tot * 100
+                d_pct = max(0.0, 100.0 - c_pct - p_pct)
+                fw_pct = s.get("avg_score", 0) * 100
+                bars_rows += (
+                    f'<div style="margin-bottom:14px;">'
+                    f'<div style="display:flex;justify-content:space-between;'
+                    f'margin-bottom:5px;">'
+                    f'<span style="font-weight:600;font-size:13.5px;'
+                    f'color:#152018;">{fw}</span>'
+                    f'<span style="font-family:\'IBM Plex Mono\',monospace;'
+                    f'font-size:11.5px;color:#8A9488;">{fw_pct:.0f}% &middot; '
+                    f'{s.get("total", 0)} reqs</span></div>'
+                    f'<div style="height:11px;border-radius:6px;overflow:hidden;'
+                    f'display:flex;background:#DDD5C2;">'
+                    f'<div style="width:{c_pct:.1f}%;background:#1C6B4A;"></div>'
+                    f'<div style="width:{p_pct:.1f}%;background:#C98A2B;"></div>'
+                    f'<div style="width:{d_pct:.1f}%;background:#B4472F;"></div>'
+                    f'</div></div>'
+                )
+            legend_html = (
+                '<div style="display:flex;gap:18px;margin-top:16px;'
+                'padding-top:14px;border-top:1px solid #E9E3D3;">'
+                '<span style="display:inline-flex;align-items:center;gap:7px;'
+                'font-size:12px;color:#4B5A50;"><span style="width:11px;'
+                'height:11px;border-radius:3px;background:#1C6B4A;'
+                'display:inline-block;"></span>Covers</span>'
+                '<span style="display:inline-flex;align-items:center;gap:7px;'
+                'font-size:12px;color:#4B5A50;"><span style="width:11px;'
+                'height:11px;border-radius:3px;background:#C98A2B;'
+                'display:inline-block;"></span>Partly</span>'
+                '<span style="display:inline-flex;align-items:center;gap:7px;'
+                'font-size:12px;color:#4B5A50;"><span style="width:11px;'
+                'height:11px;border-radius:3px;background:#B4472F;'
+                'display:inline-block;"></span>Doesn\'t</span>'
                 '</div>'
             )
-            if best_fw:
-                summary_html += (
-                    f'<p style="margin:8px 0 0 0;color:#3B4A40;">'
-                    f'Best alignment with '
-                    f'<strong>{best_fw[0]}</strong>.</p>'
-                )
-            summary_html += '</div>'
-            st.markdown(summary_html, unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="background:#FCFAF3;border:1px solid #DDD5C2;'
+                f'border-radius:14px;padding:20px 22px;margin-bottom:16px;">'
+                f'<p style="margin:0 0 14px;font-weight:700;font-size:15px;'
+                f'color:#152018;">Coverage by framework</p>'
+                f'{bars_rows}{legend_html}</div>',
+                unsafe_allow_html=True
+            )
 
             # Cost estimate
             if token_usage:
