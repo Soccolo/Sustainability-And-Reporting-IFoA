@@ -1267,29 +1267,103 @@ def main():
     # TAB 0: WELCOME / INTRODUCTION
     # ============================================
     with tab0:
-        st.header("Welcome to the Sustainability Framework Analyser")
+        # ── Hero ──
+        n_frameworks = len(FRAMEWORK_COLORS)
+        n_countries = len({c for ctrs in ADOPTION_DICT.values() for c in ctrs})
+        n_requirements = sum(
+            len(reqs)
+            for topics in framework_requirements.values()
+            for reqs in topics.values()
+        )
+        chips_html = "".join(
+            f'<span style="display:inline-flex;align-items:center;gap:8px;'
+            f'background:#FCFAF3;border:1px solid #DDD5C2;border-radius:9px;'
+            f'padding:8px 14px;font-weight:600;font-size:14px;color:#152018;'
+            f'margin:0 8px 8px 0;" title="{FRAMEWORK_FULL_NAMES.get(fw, fw)}">'
+            f'<span style="width:9px;height:9px;border-radius:50%;'
+            f'background:{color};display:inline-block;flex-shrink:0;"></span>'
+            f'{fw}</span>'
+            for fw, color in FRAMEWORK_COLORS.items()
+        )
         st.markdown(
-            "This tool was built by the **IFoA Sustainability and Reporting Working Party** "
-            "to help actuaries and sustainability professionals navigate the growing landscape "
-            "of climate and ESG reporting frameworks."
+            f'''
+<div style="padding:26px 0 6px;">
+  <div style="display:inline-flex;align-items:center;gap:8px;background:#E8F2EA;
+    border:1px solid #C6E0CC;border-radius:20px;padding:6px 14px;font-size:13px;
+    font-weight:600;color:#1C6B4A;margin-bottom:22px;">
+    <span style="width:7px;height:7px;border-radius:50%;background:#1C6B4A;
+      display:inline-block;"></span>
+    AI-assisted &middot; requirement-level analysis
+  </div>
+  <h1 style="font-family:'Spectral',serif;font-weight:600;font-size:52px;
+    line-height:1.06;letter-spacing:-0.01em;margin:0 0 18px;color:#152018;">
+    Know exactly where your ESG report stands.
+  </h1>
+  <p style="font-size:18px;line-height:1.6;color:#4B5A50;margin:0 0 30px;max-width:640px;">
+    Upload a transition plan or sustainability report and see how it measures against
+    <strong style="color:#152018;">{n_frameworks} global disclosure frameworks</strong> —
+    assessed requirement by requirement, with the exact passages that support each finding.
+  </p>
+  <div style="display:flex;gap:48px;margin:0 0 32px;">
+    <div>
+      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
+        color:#0F3D2A;line-height:1;">{n_frameworks}</div>
+      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">frameworks tracked</div>
+    </div>
+    <div>
+      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
+        color:#0F3D2A;line-height:1;">{n_countries}</div>
+      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">countries mapped</div>
+    </div>
+    <div>
+      <div style="font-family:'Spectral',serif;font-size:38px;font-weight:600;
+        color:#0F3D2A;line-height:1;">{n_requirements}</div>
+      <div style="font-size:13px;color:#8A9488;font-weight:500;margin-top:5px;">requirements assessed</div>
+    </div>
+  </div>
+  <div style="margin:0 0 14px;">{chips_html}</div>
+  <p style="font-size:13px;color:#8A9488;margin:0 0 6px;">
+    Built by the <strong style="color:#4B5A50;">IFoA Sustainability and Reporting
+    Working Party</strong>.
+  </p>
+</div>
+''',
+            unsafe_allow_html=True,
         )
 
         st.markdown("### What you can do")
-        st.markdown(
-            "**Framework Map** — Explore how sustainability frameworks are adopted globally. "
-            "Select a framework to see which countries have adopted it, and compare its similarity "
-            "to other frameworks across governance, strategy, risk, metrics, and disclosure dimensions."
-        )
-        st.markdown(
-            "**Report Analyser** — Upload a transition plan or ESG report (PDF) and have it "
-            "assessed requirement-by-requirement against the frameworks you choose. The tool uses "
-            "Claude AI to classify each requirement as *Covered*, *Partly covered*, or *Not covered*, "
-            "with rationale and relevant extracts from your document."
-        )
-        st.markdown(
-            "**Side-by-Side Comparison** — Upload two reports to benchmark them against each other. "
-            "Useful for comparing year-on-year progress or two firms' disclosures."
-        )
+        feature_cols = st.columns(3)
+        feature_cards = [
+            (
+                "Framework Map",
+                "Explore global adoption on the interactive globe and compare "
+                "similarity between frameworks across governance, strategy, "
+                "risk, metrics and disclosure.",
+            ),
+            (
+                "Report Analyser",
+                "Upload a PDF and have it assessed requirement-by-requirement. "
+                "Each one is classified as Covered, Partly covered or Not "
+                "covered, with rationale and extracts.",
+            ),
+            (
+                "Side-by-Side Comparison",
+                "Benchmark two reports against each other — useful for "
+                "year-on-year progress or comparing two firms' disclosures.",
+            ),
+        ]
+        for col, (card_title, card_body) in zip(feature_cols, feature_cards):
+            with col:
+                st.markdown(
+                    f'<div style="background:#FCFAF3;border:1px solid #DDD5C2;'
+                    f'border-radius:12px;padding:20px;min-height:150px;">'
+                    f'<p style="margin:0 0 8px;font-size:16px;font-weight:700;'
+                    f'color:#152018;">{card_title}</p>'
+                    f'<p style="margin:0;font-size:13.5px;line-height:1.55;'
+                    f'color:#4B5A50;">{card_body}</p>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
         st.markdown("### How to use the Report Analyser")
         st.markdown(
