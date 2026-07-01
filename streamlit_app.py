@@ -2053,7 +2053,7 @@ def main():
                 ) / total_results * 100
             ) if total_results else 0.0
             best_note = (
-                f'Best alignment with <strong style="color:#FCFAF3;">'
+                f'Best alignment with <strong style="color:#FCFAF3 !important;">'
                 f'{best_fw[0]}</strong>.'
                 if best_fw else ''
             )
@@ -2071,15 +2071,15 @@ def main():
                 f'background:#0F3D2A;display:flex;flex-direction:column;'
                 f'align-items:center;justify-content:center;">'
                 f'<span style="font-family:\'Spectral\',serif;font-size:26px;'
-                f'font-weight:600;color:#FCFAF3;line-height:1;">'
+                f'font-weight:600;color:#FCFAF3 !important;line-height:1;">'
                 f'{overall_pct:.0f}%</span>'
-                f'<span style="font-size:9px;color:#9FBAA8;'
+                f'<span style="font-size:9px;color:#9FBAA8 !important;'
                 f'letter-spacing:.05em;">OVERALL</span>'
                 f'</div></div>'
-                f'<div><p style="margin:0 0 4px;font-size:13px;color:#9FBAA8;">'
+                f'<div><p style="margin:0 0 4px;font-size:13px;color:#9FBAA8 !important;">'
                 f'Weighted coverage</p>'
                 f'<p style="margin:0;font-size:13.5px;line-height:1.5;'
-                f'color:#FCFAF3;">Analysed <strong>{num_pages}</strong> pages '
+                f'color:#FCFAF3 !important;">Analysed <strong>{num_pages}</strong> pages '
                 f'against <strong>{len(framework_summaries)}</strong> frameworks '
                 f'({total_results} requirements). {best_note}</p>'
                 f'</div></div>'
