@@ -26,6 +26,8 @@ import anthropic
 from io import BytesIO
 from collections import defaultdict
 
+import report_drafter
+
 # Page config
 st.set_page_config(
     page_title="Sustainability Framework Analyser",
@@ -543,7 +545,7 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
 
     Model strategy:
     - Tries claude-haiku-4-5 first (cheapest: $1/$5 per MTok)
-    - Falls back to claude-sonnet-4 if Haiku hits rate limits or input size limits
+    - Falls back to claude-sonnet-5 if Haiku hits rate limits or input size limits
     - Once fallback is triggered, stays on Sonnet for remaining frameworks
 
     Cost optimisation:
@@ -594,7 +596,7 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
 
     # Model fallback order: try Haiku first (cheapest), fall back to Sonnet if rate-limited
     PRIMARY_MODEL = "claude-haiku-4-5-20251001"
-    FALLBACK_MODEL = "claude-sonnet-4-20250514"
+    FALLBACK_MODEL = "claude-sonnet-5"
     use_fallback = False  # Once we switch, stay on Sonnet for remaining frameworks
 
     for step, framework in enumerate(selected_frameworks):
@@ -1271,8 +1273,9 @@ def main():
     # Load similarity CSVs
     similarity_data = load_similarity_data()
 
-    tab0, tab1, tab2, tab3 = st.tabs([
-        "Welcome", "Framework Map", "Report Analyser", "Side-by-Side Comparison"
+    tab0, tab1, tab2, tab3, tab4 = st.tabs([
+        "Welcome", "Framework Map", "Report Analyser",
+        "Side-by-Side Comparison", "Report Drafter (Beta)"
     ])
 
     # ============================================
@@ -1821,7 +1824,7 @@ def main():
             "Upload your transition plan or ESG report PDF to analyse how "
             "well it aligns with sustainability frameworks. Uses "
             "**Claude Haiku 4.5** to classify your report "
-            "requirement-by-requirement (falls back to **Sonnet 4** for "
+            "requirement-by-requirement (falls back to **Sonnet 5** for "
             "large documents) \u2014 finding relevant text across the full "
             "document, classifying coverage, and providing a rationale "
             "for each."
@@ -2185,14 +2188,14 @@ def main():
             # Cost estimate
             if token_usage:
                 models_used = token_usage.get('models_used', set())
-                used_sonnet = "claude-sonnet-4-20250514" in models_used
+                used_sonnet = "claude-sonnet-5" in models_used
                 used_haiku = "claude-haiku-4-5-20251001" in models_used
 
                 if used_sonnet and used_haiku:
-                    model_label = "Haiku 4.5 + Sonnet 4 (fallback)"
+                    model_label = "Haiku 4.5 + Sonnet 5 (fallback)"
                     input_rate, output_rate = 3.0, 15.0
                 elif used_sonnet:
-                    model_label = "Sonnet 4 (fallback)"
+                    model_label = "Sonnet 5 (fallback)"
                     input_rate, output_rate = 3.0, 15.0
                 else:
                     model_label = "Haiku 4.5"
@@ -2779,6 +2782,16 @@ def main():
                 ),
                 key="cmp_download"
             )
+
+    # ============================================
+    # TAB 4: REPORT DRAFTER (BETA)
+    # ============================================
+    with tab4:
+        report_drafter.render_drafter_tab(
+            framework_requirements, requirement_refs,
+            FRAMEWORK_FULL_NAMES, extract_text_from_pdf,
+            prettify_topic_name,
+        )
 
 
 if __name__ == "__main__":
