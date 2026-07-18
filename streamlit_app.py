@@ -619,7 +619,11 @@ def claude_analyze_report(report_text, selected_frameworks, api_key, framework_r
             if resp.stop_reason == "max_tokens":
                 raise ValueError("Response truncated (max_tokens reached)")
 
-            raw = resp.content[0].text.strip()
+            # Sonnet 5 runs adaptive thinking by default, so the response
+            # may lead with thinking blocks — join the text blocks only.
+            raw = "".join(
+                block.text for block in resp.content if block.type == "text"
+            ).strip()
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
                 if raw.endswith("```"):
