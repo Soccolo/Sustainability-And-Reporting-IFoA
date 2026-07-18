@@ -26,6 +26,8 @@ import anthropic
 from io import BytesIO
 from collections import defaultdict
 
+import report_drafter
+
 # Page config
 st.set_page_config(
     page_title="Sustainability Framework Analyser",
@@ -1271,8 +1273,9 @@ def main():
     # Load similarity CSVs
     similarity_data = load_similarity_data()
 
-    tab0, tab1, tab2, tab3 = st.tabs([
-        "Welcome", "Framework Map", "Report Analyser", "Side-by-Side Comparison"
+    tab0, tab1, tab2, tab3, tab4 = st.tabs([
+        "Welcome", "Framework Map", "Report Analyser",
+        "Side-by-Side Comparison", "Report Drafter (Beta)"
     ])
 
     # ============================================
@@ -2779,6 +2782,16 @@ def main():
                 ),
                 key="cmp_download"
             )
+
+    # ============================================
+    # TAB 4: REPORT DRAFTER (BETA)
+    # ============================================
+    with tab4:
+        report_drafter.render_drafter_tab(
+            framework_requirements, requirement_refs,
+            FRAMEWORK_FULL_NAMES, extract_text_from_pdf,
+            prettify_topic_name,
+        )
 
 
 if __name__ == "__main__":
