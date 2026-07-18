@@ -44,7 +44,7 @@ DRAFT_DIRECTIONS = {
 # Drafting models. Sonnet is recommended: drafting disclosure prose is a
 # harder task than the classification done in the Report Analyser.
 DRAFTER_MODELS = {
-    "Claude Sonnet 4.5 — recommended for drafting quality": "claude-sonnet-4-5",
+    "Claude Sonnet 5 — recommended for drafting quality": "claude-sonnet-5",
     "Claude Haiku 4.5 — lowest cost": "claude-haiku-4-5",
 }
 
