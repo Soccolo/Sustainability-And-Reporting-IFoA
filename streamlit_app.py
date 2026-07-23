@@ -21,6 +21,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import html
 import json
 from io import BytesIO
 from collections import defaultdict
@@ -28,10 +29,14 @@ from collections import defaultdict
 import report_drafter
 from analysis_core import (
     AnalysisAuthenticationError,
+    HAIKU_MODEL,
+    LUNA_MODEL,
     MODEL_CATALOG,
     PRIMARY_MODEL,
+    TERRA_MODEL,
     USER_SELECTABLE_MODELS,
     analyze_report,
+    analyze_report_with_review_cascade,
     estimate_usage_cost,
     extract_pdf_pages,
     format_report_text,
@@ -575,6 +580,39 @@ def run_model_analysis(
     )
 
 
+def run_review_cascade(
+    report_text,
+    selected_frameworks,
+    anthropic_api_key,
+    openai_api_key,
+    framework_requirements,
+    progress_bar=None,
+    requirement_refs=None,
+    report_pages=None,
+):
+    """Run Haiku, Luna, then conditional Terra review using standard calls."""
+
+    def update_progress(value):
+        if progress_bar:
+            progress_bar.progress(value)
+
+    def show_status(level, message):
+        getattr(st, level, st.info)(message)
+
+    return analyze_report_with_review_cascade(
+        report_text=report_text,
+        selected_frameworks=selected_frameworks,
+        anthropic_api_key=anthropic_api_key,
+        openai_api_key=openai_api_key,
+        framework_requirements=framework_requirements,
+        framework_full_names=FRAMEWORK_FULL_NAMES,
+        requirement_refs=requirement_refs,
+        report_pages=report_pages,
+        progress_callback=update_progress,
+        status_callback=show_status,
+    )
+
+
 def render_model_api_key(model_id, widget_key):
     """Render the credential field belonging to the selected provider."""
     model = get_model_config(model_id)
@@ -625,6 +663,143 @@ def render_model_price_caption(model_id):
         f"${model['batch_output_price']:g} output. Vision and reasoning "
         f"change token usage.{long_context_note}"
     )
+
+
+ANALYSIS_STRATEGY_SINGLE = "Single model"
+ANALYSIS_STRATEGY_CASCADE = "Reviewed cascade"
+
+CASCADE_STATUS_LABELS = {
+    "haiku_luna_agree": "Haiku + Luna agree",
+    "terra_adjudicated": "Terra adjudicated",
+    "three_way_disagreement": "Three-way disagreement",
+    "luna_review_failed": "Luna review incomplete",
+    "terra_review_failed": "Terra review incomplete",
+}
+CASCADE_PROVISIONAL_STATUSES = {
+    "three_way_disagreement",
+    "luna_review_failed",
+    "terra_review_failed",
+}
+
+
+def get_cascade_vote(result, model_name):
+    """Return one model's saved cascade verdict, or an empty mapping."""
+    votes = result.get("model_verdicts", {})
+    if not isinstance(votes, dict):
+        return {}
+    vote = votes.get(model_name, {})
+    return vote if isinstance(vote, dict) else {}
+
+
+def is_review_cascade_result(result):
+    return result.get("analysis_mode") == "review_cascade"
+
+
+def is_provisional_cascade_result(result):
+    return (
+        is_review_cascade_result(result)
+        and result.get("cascade_status") in CASCADE_PROVISIONAL_STATUSES
+    )
+
+
+def result_needs_human_review(result):
+    """Mirror the UI review queue for exports and summary counts."""
+    return bool(
+        result.get("needs_human_review")
+        or result.get("confidence", "low") == "low"
+    )
+
+
+def cascade_status_label(result):
+    status = result.get("cascade_status", "")
+    return CASCADE_STATUS_LABELS.get(status, str(status).replace("_", " ").title())
+
+
+def build_cascade_review_html(result):
+    """Return escaped badge and compact audit trail for a cascade result."""
+    if not is_review_cascade_result(result):
+        return "", ""
+
+    status = result.get("cascade_status", "")
+    status_label = html.escape(cascade_status_label(result))
+    status_colors = {
+        "haiku_luna_agree": ("#E8F2EA", "#1C6B4A"),
+        "terra_adjudicated": ("#FBF0D8", "#977322"),
+        "three_way_disagreement": ("#F8E3DD", "#B4472F"),
+        "luna_review_failed": ("#F8E3DD", "#B4472F"),
+        "terra_review_failed": ("#F8E3DD", "#B4472F"),
+    }
+    status_bg, status_fg = status_colors.get(
+        status, ("#EDE7D8", "#4B5A50")
+    )
+    badge = (
+        f'<span style="white-space:nowrap;background:{status_bg};'
+        f'color:{status_fg};padding:3px 8px;border-radius:10px;'
+        f'font-size:10px;font-weight:700;">{status_label}</span>'
+    )
+
+    vote_rows = []
+    for model_name, display_name in (
+        ("haiku", "Haiku"),
+        ("luna", "Luna"),
+        ("terra", "Terra"),
+    ):
+        vote = get_cascade_vote(result, model_name)
+        if not vote:
+            if model_name == "terra" and status == "haiku_luna_agree":
+                vote_rows.append(
+                    '<div style="font-size:11px;color:#6E796F;">'
+                    "<strong>Terra:</strong> Not needed — Haiku and Luna "
+                    "agreed.</div>"
+                )
+            elif model_name == "luna" and status == "luna_review_failed":
+                vote_rows.append(
+                    '<div style="font-size:11px;color:#B4472F;">'
+                    "<strong>Luna:</strong> Review did not complete.</div>"
+                )
+            elif model_name == "terra" and status == "terra_review_failed":
+                vote_rows.append(
+                    '<div style="font-size:11px;color:#B4472F;">'
+                    "<strong>Terra:</strong> Adjudication did not complete."
+                    "</div>"
+                )
+            continue
+        verdict = html.escape(str(vote.get("classification") or ""))
+        confidence = html.escape(str(vote.get("confidence") or ""))
+        confidence_reason = html.escape(
+            str(vote.get("confidence_reason") or "")
+        )
+        rationale = html.escape(str(vote.get("rationale") or ""))
+        extracts = vote.get("relevant_extracts", [])
+        if not isinstance(extracts, list):
+            extracts = []
+        evidence = "<br>".join(
+            html.escape(str(extract)) for extract in extracts
+        )
+        vote_rows.append(
+            '<div style="font-size:11px;color:#3B4A40;margin-top:5px;">'
+            f"<strong>{display_name}:</strong> {verdict}"
+            f"{f' · {confidence} confidence' if confidence else ''}"
+            f"{f'<br><strong>Confidence reason:</strong> {confidence_reason}' if confidence_reason else ''}"
+            f"{f'<br><strong>Rationale:</strong> {rationale}' if rationale else ''}"
+            f"{f'<br><strong>Evidence:</strong><br>{evidence}' if evidence else ''}"
+            "</div>"
+        )
+
+    review_flag = (
+        '<div style="font-size:11px;color:#B4472F;margin-top:6px;'
+        'font-weight:700;">Human review required</div>'
+        if result_needs_human_review(result)
+        else ""
+    )
+    section = (
+        '<div style="background:#FCFAF3;border:1px solid #DDD5C2;'
+        'border-radius:6px;padding:9px 10px;margin-top:9px;">'
+        f'<div style="font-size:11px;color:#152018;font-weight:700;">'
+        f"Review trail — {status_label}</div>"
+        f"{''.join(vote_rows)}{review_flag}</div>"
+    )
+    return badge, section
 
 
 def get_explanation(score):
@@ -691,9 +866,23 @@ def generate_results_excel(results, framework_summaries):
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
+    def safe_excel_value(value):
+        """Prevent report/model text from becoming an executable formula."""
+        if isinstance(value, str):
+            stripped = value.lstrip()
+            if (
+                stripped.startswith(("=", "+", "-", "@"))
+                or value.startswith(("\t", "\r", "\n"))
+            ):
+                return "'" + value
+        return value
+
     summary_headers = [
         "Framework", "Covers", "Partly Covers", "Doesn't Cover",
         "Total Requirements", "Low-confidence Review",
+        "Haiku + Luna Agreements", "Terra Adjudications",
+        "Three-way Disagreements", "Incomplete Cascade Reviews",
+        "Human Review",
     ]
     for col, h in enumerate(summary_headers, 1):
         cell = ws_summary.cell(row=1, column=col, value=h)
@@ -719,15 +908,67 @@ def generate_results_excel(results, framework_summaries):
         ws_summary.cell(
             row=row, column=6, value=s.get("low_confidence", 0)
         ).border = thin_border
+        status_counts = s.get("cascade_status_counts", {})
+        framework_results = [
+            result for result in results if result.get("framework") == fw
+        ]
+        agreement_count = status_counts.get(
+            "haiku_luna_agree",
+            sum(
+                result.get("cascade_status") == "haiku_luna_agree"
+                for result in framework_results
+            ),
+        )
+        terra_count = status_counts.get(
+            "terra_adjudicated",
+            sum(
+                result.get("cascade_status") == "terra_adjudicated"
+                for result in framework_results
+            ),
+        )
+        three_way_count = status_counts.get(
+            "three_way_disagreement",
+            sum(
+                result.get("cascade_status") == "three_way_disagreement"
+                for result in framework_results
+            ),
+        )
+        incomplete_count = sum(
+            status_counts.get(status, 0)
+            for status in ("luna_review_failed", "terra_review_failed")
+        )
+        human_review_count = sum(
+            result_needs_human_review(result)
+            for result in framework_results
+        )
+        for column, value in enumerate(
+            (
+                agreement_count,
+                terra_count,
+                three_way_count,
+                incomplete_count,
+                human_review_count,
+            ),
+            start=7,
+        ):
+            ws_summary.cell(row=row, column=column, value=value).border = (
+                thin_border
+            )
         row += 1
 
-    for col_letter in ["A", "B", "C", "D", "E", "F"]:
+    for col_letter in [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K"
+    ]:
         ws_summary.column_dimensions[col_letter].width = 22
 
     # --- Sheet 2: Detailed Results ---
     ws_detail = wb.create_sheet("Detailed Results")
     detail_headers = [
         "Framework", "Topic", "Reference", "Requirement", "Classification",
+        "Cascade Status", "Human Review Required",
+        "Haiku Verdict", "Haiku Confidence", "Haiku Review Detail",
+        "Luna Verdict", "Luna Confidence", "Luna Review Detail",
+        "Terra Verdict", "Terra Confidence", "Terra Review Detail",
         "Confidence", "Confidence Reason", "Rationale", "Relevant Extracts",
     ]
     for col, h in enumerate(detail_headers, 1):
@@ -737,81 +978,161 @@ def generate_results_excel(results, framework_summaries):
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
         cell.border = thin_border
 
-    for i, r in enumerate(results, 2):
-        ws_detail.cell(row=i, column=1, value=r["framework"]).border = thin_border
-        ws_detail.cell(row=i, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
-        ws_detail.cell(row=i, column=3, value=r.get("reference", "")).border = thin_border
-        req_cell = ws_detail.cell(row=i, column=4, value=r["requirement"])
-        req_cell.alignment = Alignment(wrap_text=True)
-        req_cell.border = thin_border
+    def write_result_row(worksheet, row_number, result):
+        """Write a final result plus optional cascade audit trail."""
+        def vote_review_detail(vote):
+            if not vote:
+                return ""
+            detail_lines = []
+            confidence_reason = vote.get("confidence_reason", "")
+            if confidence_reason:
+                detail_lines.append(
+                    f"Confidence reason: {confidence_reason}"
+                )
+            rationale = vote.get("rationale", "")
+            if rationale:
+                detail_lines.append(f"Rationale: {rationale}")
+            extracts = vote.get("relevant_extracts", [])
+            if isinstance(extracts, list) and extracts:
+                detail_lines.append(
+                    "Evidence: " + "; ".join(str(item) for item in extracts)
+                )
+            return "\n".join(detail_lines)
 
-        class_cell = ws_detail.cell(row=i, column=5, value=r["classification"])
-        if r["classification"] == CLASSIFICATION_COVERS:
+        haiku_vote = get_cascade_vote(result, "haiku")
+        luna_vote = get_cascade_vote(result, "luna")
+        terra_vote = get_cascade_vote(result, "terra")
+        is_cascade = is_review_cascade_result(result)
+        status = result.get("cascade_status", "") if is_cascade else ""
+        human_review = result_needs_human_review(result)
+        values = [
+            result["framework"],
+            prettify_topic_name(result["topic"]),
+            result.get("reference", ""),
+            result["requirement"],
+            result["classification"],
+            status,
+            "Yes" if human_review else "No",
+            haiku_vote.get("classification", ""),
+            haiku_vote.get("confidence", ""),
+            vote_review_detail(haiku_vote),
+            luna_vote.get("classification", ""),
+            luna_vote.get("confidence", ""),
+            vote_review_detail(luna_vote),
+            terra_vote.get("classification", ""),
+            terra_vote.get("confidence", ""),
+            vote_review_detail(terra_vote),
+            result.get("confidence", "low").title(),
+            result.get("confidence_reason", ""),
+            result.get("rationale", ""),
+            "; ".join(result.get("relevant_extracts", [])),
+        ]
+        for column, value in enumerate(values, 1):
+            cell = worksheet.cell(
+                row=row_number,
+                column=column,
+                value=safe_excel_value(value),
+            )
+            cell.border = thin_border
+            if column in {4, 10, 13, 16, 18, 19, 20}:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        class_cell = worksheet.cell(row=row_number, column=5)
+        if result["classification"] == CLASSIFICATION_COVERS:
             class_cell.fill = green_fill
-        elif r["classification"] == CLASSIFICATION_PARTLY:
+        elif result["classification"] == CLASSIFICATION_PARTLY:
             class_cell.fill = amber_fill
         else:
             class_cell.fill = red_fill
-        class_cell.border = thin_border
 
-        confidence_cell = ws_detail.cell(
-            row=i, column=6, value=r.get("confidence", "low").title()
-        )
-        if r.get("confidence") == "low":
+        status_cell = worksheet.cell(row=row_number, column=6)
+        if status == "haiku_luna_agree":
+            status_cell.fill = green_fill
+        elif status == "terra_adjudicated":
+            status_cell.fill = amber_fill
+        elif status == "three_way_disagreement":
+            status_cell.fill = red_fill
+
+        human_review_cell = worksheet.cell(row=row_number, column=7)
+        human_review_cell.fill = red_fill if human_review else green_fill
+
+        confidence_cell = worksheet.cell(row=row_number, column=17)
+        if result.get("confidence") == "low":
             confidence_cell.fill = red_fill
-        elif r.get("confidence") == "medium":
+        elif result.get("confidence") == "medium":
             confidence_cell.fill = amber_fill
         else:
             confidence_cell.fill = green_fill
-        confidence_cell.border = thin_border
-        ws_detail.cell(
-            row=i, column=7, value=r.get("confidence_reason", "")
-        ).border = thin_border
-        ws_detail.cell(row=i, column=8, value=r.get("rationale", "")).border = thin_border
-        ws_detail.cell(
-            row=i, column=9,
-            value="; ".join(r.get("relevant_extracts", []))
-        ).border = thin_border
 
-    ws_detail.column_dimensions["A"].width = 14
-    ws_detail.column_dimensions["B"].width = 18
-    ws_detail.column_dimensions["C"].width = 18
-    ws_detail.column_dimensions["D"].width = 50
-    ws_detail.column_dimensions["E"].width = 26
-    ws_detail.column_dimensions["F"].width = 15
-    ws_detail.column_dimensions["G"].width = 40
-    ws_detail.column_dimensions["H"].width = 50
-    ws_detail.column_dimensions["I"].width = 50
+    for i, r in enumerate(results, 2):
+        write_result_row(ws_detail, i, r)
+
+    column_widths = {
+        "A": 14, "B": 18, "C": 18, "D": 50, "E": 26,
+        "F": 24, "G": 20, "H": 26, "I": 16, "J": 45,
+        "K": 26, "L": 16, "M": 45, "N": 26, "O": 16,
+        "P": 45, "Q": 15, "R": 40, "S": 50, "T": 50,
+    }
+    for col_letter, width in column_widths.items():
+        ws_detail.column_dimensions[col_letter].width = width
 
     # --- Sheet 3: Gap Analysis ---
     ws_gap = wb.create_sheet("Gap Analysis")
-    gap_headers = ["Framework", "Topic", "Reference", "Requirement", "Classification", "Rationale"]
-    for col, h in enumerate(gap_headers, 1):
+    for col, h in enumerate(detail_headers, 1):
         cell = ws_gap.cell(row=1, column=col, value=h)
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = Alignment(horizontal="center", wrap_text=True)
         cell.border = thin_border
 
+    provisional_results = [
+        result
+        for result in results
+        if is_provisional_cascade_result(result)
+    ]
     gap_row = 2
+    if provisional_results:
+        ws_gap.merge_cells(
+            start_row=2,
+            start_column=1,
+            end_row=2,
+            end_column=len(detail_headers),
+        )
+        note_cell = ws_gap.cell(
+            row=2,
+            column=1,
+            value=(
+                f"{len(provisional_results)} provisional verdict(s) are not "
+                "treated as confirmed gaps. See the Provisional Review sheet."
+            ),
+        )
+        note_cell.font = Font(bold=True, color="8A3A22")
+        note_cell.fill = amber_fill
+        note_cell.alignment = Alignment(wrap_text=True, vertical="top")
+        gap_row = 3
     for r in results:
-        if r["classification"] != CLASSIFICATION_COVERS:
-            ws_gap.cell(row=gap_row, column=1, value=r["framework"]).border = thin_border
-            ws_gap.cell(row=gap_row, column=2, value=prettify_topic_name(r["topic"])).border = thin_border
-            ws_gap.cell(row=gap_row, column=3, value=r.get("reference", "")).border = thin_border
-            ws_gap.cell(row=gap_row, column=4, value=r["requirement"]).border = thin_border
-            class_cell = ws_gap.cell(row=gap_row, column=5, value=r["classification"])
-            class_cell.fill = amber_fill if r["classification"] == CLASSIFICATION_PARTLY else red_fill
-            class_cell.border = thin_border
-            ws_gap.cell(row=gap_row, column=6, value=r.get("rationale", "")).border = thin_border
+        if (
+            r["classification"] != CLASSIFICATION_COVERS
+            and not is_provisional_cascade_result(r)
+        ):
+            write_result_row(ws_gap, gap_row, r)
             gap_row += 1
 
-    ws_gap.column_dimensions["A"].width = 14
-    ws_gap.column_dimensions["B"].width = 18
-    ws_gap.column_dimensions["C"].width = 18
-    ws_gap.column_dimensions["D"].width = 50
-    ws_gap.column_dimensions["E"].width = 26
-    ws_gap.column_dimensions["F"].width = 50
+    for col_letter, width in column_widths.items():
+        ws_gap.column_dimensions[col_letter].width = width
+
+    if provisional_results:
+        ws_provisional = wb.create_sheet("Provisional Review")
+        for col, header in enumerate(detail_headers, 1):
+            cell = ws_provisional.cell(row=1, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+            cell.border = thin_border
+        for row_number, result in enumerate(provisional_results, 2):
+            write_result_row(ws_provisional, row_number, result)
+        for col_letter, width in column_widths.items():
+            ws_provisional.column_dimensions[col_letter].width = width
 
     output = BytesIO()
     wb.save(output)
@@ -821,10 +1142,33 @@ def generate_results_excel(results, framework_summaries):
 
 def render_gap_analysis(results, framework_summaries):
     """Render a gap analysis summary — grouped by framework, showing only gaps."""
-    gaps = [r for r in results if r["classification"] != CLASSIFICATION_COVERS]
+    provisional_count = sum(
+        is_provisional_cascade_result(result) for result in results
+    )
+    gaps = [
+        result
+        for result in results
+        if (
+            result["classification"] != CLASSIFICATION_COVERS
+            and not is_provisional_cascade_result(result)
+        )
+    ]
+
+    if provisional_count:
+        st.info(
+            f"{provisional_count} provisional verdict(s) are excluded from "
+            "confirmed gaps. Review them in the human review queue first."
+        )
 
     if not gaps:
-        st.success("No gaps found — the report covers all analysed requirements.")
+        if provisional_count:
+            st.success(
+                "No confirmed gaps were found among the resolved verdicts."
+            )
+        else:
+            st.success(
+                "No gaps found — the report covers all analysed requirements."
+            )
         return
 
     doesnt_count = sum(1 for r in gaps if r["classification"] == CLASSIFICATION_DOESNT)
@@ -857,17 +1201,22 @@ def render_gap_analysis(results, framework_summaries):
             if doesnt:
                 st.markdown("**Not covered** — action required:")
                 for r in doesnt:
-                    req_text = r["requirement"]
+                    req_text = str(r["requirement"])
                     if len(req_text) > 200:
                         req_text = req_text[:200] + "…"
-                    ref = r.get("reference", "")
+                    req_text = html.escape(req_text)
+                    topic_text = html.escape(
+                        prettify_topic_name(str(r["topic"]))
+                    )
+                    ref = html.escape(str(r.get("reference", "")))
                     ref_str = f" · {ref}" if ref else ""
+                    rationale = html.escape(str(r.get("rationale", "")))
                     st.markdown(
                         f'<div style="background:#F8E3DD;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #B4472F;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#152018;">'
-                        f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
-                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{r.get("rationale", "")}</p>'
+                        f'<strong>[{topic_text}{ref_str}]</strong> {req_text}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{rationale}</p>'
                         f'</div>',
                         unsafe_allow_html=True
                     )
@@ -875,17 +1224,22 @@ def render_gap_analysis(results, framework_summaries):
             if partly:
                 st.markdown("**Partly covered** — could be strengthened:")
                 for r in partly:
-                    req_text = r["requirement"]
+                    req_text = str(r["requirement"])
                     if len(req_text) > 200:
                         req_text = req_text[:200] + "…"
-                    ref = r.get("reference", "")
+                    req_text = html.escape(req_text)
+                    topic_text = html.escape(
+                        prettify_topic_name(str(r["topic"]))
+                    )
+                    ref = html.escape(str(r.get("reference", "")))
                     ref_str = f" · {ref}" if ref else ""
+                    rationale = html.escape(str(r.get("rationale", "")))
                     st.markdown(
                         f'<div style="background:#FBF0D8;padding:10px;border-radius:6px;margin:6px 0;'
                         f'border-left:4px solid #C98A2B;">'
                         f'<p style="margin:0 0 4px 0;font-size:13px;color:#152018;">'
-                        f'<strong>[{prettify_topic_name(r["topic"])}{ref_str}]</strong> {req_text}</p>'
-                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{r.get("rationale", "")}</p>'
+                        f'<strong>[{topic_text}{ref_str}]</strong> {req_text}</p>'
+                        f'<p style="margin:0;font-size:12px;color:#4B5A50;">{rationale}</p>'
                         f'</div>',
                         unsafe_allow_html=True
                     )
@@ -1684,14 +2038,14 @@ def main():
             pending_model_id = PRIMARY_MODEL
         if pending_batch_id:
             st.session_state["analysis_model_id"] = pending_model_id
+            st.session_state["analysis_strategy"] = ANALYSIS_STRATEGY_SINGLE
 
         st.header("ESG Report Analyser")
         st.markdown(
             "Upload your transition plan or ESG report PDF to analyse how "
-            "well it aligns with sustainability frameworks. Choose Claude "
-            "Haiku 4.5, GPT-5.6 Luna, or GPT-5.6 Terra; the selected model "
-            "is used for every framework without a hidden cross-model "
-            "fallback."
+            "well it aligns with sustainability frameworks. Use one chosen "
+            "model, or select the reviewed cascade for explicit model review "
+            "and conditional adjudication."
         )
 
         # --- All controls on one row ---
@@ -1699,23 +2053,74 @@ def main():
         api_col, upload_col = st.columns([1, 1])
 
         with api_col:
-            selected_model_id = st.selectbox(
-                "Analysis model",
-                options=USER_SELECTABLE_MODELS,
+            analysis_strategy = st.radio(
+                "Analysis strategy",
+                options=[
+                    ANALYSIS_STRATEGY_SINGLE,
+                    ANALYSIS_STRATEGY_CASCADE,
+                ],
                 index=0,
-                format_func=model_picker_label,
-                key="analysis_model_id",
+                key="analysis_strategy",
                 disabled=bool(pending_batch_id),
+                horizontal=True,
                 help=(
-                    "A pending batch locks its original provider and model "
-                    "until it is resumed or cleared."
+                    "Reviewed cascade runs Haiku first; Luna reviews Haiku's "
+                    "explicit verdict, evidence, and rationale; Terra reviews "
+                    "only disagreements."
                 ),
             )
-            render_model_price_caption(selected_model_id)
-            selected_provider = get_model_config(selected_model_id)["provider"]
-            api_key = render_model_api_key(
-                selected_model_id, f"analysis_{selected_provider}_api_key"
+            is_review_cascade = (
+                analysis_strategy == ANALYSIS_STRATEGY_CASCADE
             )
+            anthropic_api_key = ""
+            openai_api_key = ""
+            api_key = ""
+
+            if is_review_cascade:
+                selected_model_id = HAIKU_MODEL
+                st.warning(
+                    "**Reviewed cascade is slower and costlier.** Haiku and "
+                    "Luna run for every requirement: Luna reviews Haiku's "
+                    "explicit verdict, evidence, and rationale while checking "
+                    "the report evidence. Terra is charged only when their "
+                    "classifications disagree. Sequential review uses standard "
+                    "API pricing."
+                )
+                st.markdown("**Required credentials**")
+                anthropic_api_key = render_model_api_key(
+                    HAIKU_MODEL, "analysis_anthropic_api_key"
+                )
+                openai_api_key = render_model_api_key(
+                    LUNA_MODEL, "analysis_openai_api_key"
+                )
+                with st.expander("Model costs in this cascade"):
+                    st.markdown("**Haiku — initial assessment**")
+                    render_model_price_caption(HAIKU_MODEL)
+                    st.markdown("**Luna — reviews every assessment**")
+                    render_model_price_caption(LUNA_MODEL)
+                    st.markdown("**Terra — disagreements only**")
+                    render_model_price_caption(TERRA_MODEL)
+            else:
+                selected_model_id = st.selectbox(
+                    "Analysis model",
+                    options=USER_SELECTABLE_MODELS,
+                    index=0,
+                    format_func=model_picker_label,
+                    key="analysis_model_id",
+                    disabled=bool(pending_batch_id),
+                    help=(
+                        "A pending batch locks its original provider and model "
+                        "until it is resumed or cleared."
+                    ),
+                )
+                render_model_price_caption(selected_model_id)
+                selected_provider = get_model_config(
+                    selected_model_id
+                )["provider"]
+                api_key = render_model_api_key(
+                    selected_model_id,
+                    f"analysis_{selected_provider}_api_key",
+                )
 
             st.markdown("**Select Frameworks**")
             available_frameworks = (
@@ -1730,9 +2135,13 @@ def main():
                     st.session_state.selected_frameworks = (
                         available_frameworks.copy()
                     )
+                    for framework in available_frameworks:
+                        st.session_state[f"fw_{framework}"] = True
             with btn_col2:
                 if st.button("Clear All"):
                     st.session_state.selected_frameworks = []
+                    for framework in available_frameworks:
+                        st.session_state[f"fw_{framework}"] = False
 
             if 'selected_frameworks' not in st.session_state:
                 st.session_state.selected_frameworks = ["TCFD", "TNFD"]
@@ -1773,13 +2182,21 @@ def main():
 
         with upload_col:
             st.markdown("**Upload Document**")
-            st.info(
-                "**Processing time:** Batch API is the cheaper but slower "
-                "option and may take minutes or substantially longer. Turn it "
-                "off for the fastest interactive result. Vision also adds "
-                "processing time because page images must be rendered, "
-                "uploaded, and analysed."
-            )
+            if is_review_cascade:
+                st.info(
+                    "**Processing time:** Reviewed cascade makes two full "
+                    "sequential passes, plus conditional Terra calls. Vision "
+                    "also adds time because page images must be rendered, "
+                    "uploaded, and analysed."
+                )
+            else:
+                st.info(
+                    "**Processing time:** Batch API is the cheaper but slower "
+                    "option and may take minutes or substantially longer. Turn "
+                    "it off for the fastest interactive result. Vision also "
+                    "adds processing time because page images must be rendered, "
+                    "uploaded, and analysed."
+                )
             use_vision = st.checkbox(
                 "Use vision for charts and image-based tables — slower",
                 value=True,
@@ -1790,16 +2207,34 @@ def main():
                     "upload and analysis time."
                 ),
             )
-            use_batch_api = st.checkbox(
-                "Use Batch API — 50% cheaper, but slower",
-                value=True,
-                help=(
-                    "Uses Anthropic Message Batches or OpenAI Batch, depending "
-                    "on the selected model. Batch is designed for lower cost, "
-                    "not immediate results: it may take minutes and can take up "
-                    "to 24 hours. Turn it off for faster interactive testing."
-                ),
-            )
+            if is_review_cascade:
+                use_batch_api = st.checkbox(
+                    "Batch API unavailable for reviewed cascade",
+                    value=False,
+                    disabled=True,
+                    key="analysis_cascade_batch_disabled",
+                    help=(
+                        "The review stages depend on earlier verdicts, so this "
+                        "mode uses sequential standard API calls."
+                    ),
+                )
+                st.caption(
+                    "Sequential review uses standard API calls; Batch API "
+                    "remains available in Single model mode."
+                )
+            else:
+                use_batch_api = st.checkbox(
+                    "Use Batch API — 50% cheaper, but slower",
+                    value=True,
+                    key="analysis_single_use_batch",
+                    help=(
+                        "Uses Anthropic Message Batches or OpenAI Batch, "
+                        "depending on the selected model. Batch is designed for "
+                        "lower cost, not immediate results: it may take minutes "
+                        "and can take up to 24 hours. Turn it off for faster "
+                        "interactive testing."
+                    ),
+                )
             uploaded_file = st.file_uploader(
                 "Choose a PDF file", type="pdf",
                 help="Upload your ESG report or transition plan PDF"
@@ -1885,6 +2320,9 @@ def main():
                 st.session_state.framework_summaries = framework_summaries
                 st.session_state.num_pages = pending_analysis["num_pages"]
                 st.session_state.token_usage = token_usage
+                st.session_state.analysis_strategy_used = (
+                    ANALYSIS_STRATEGY_SINGLE
+                )
                 st.session_state.selected_frameworks = pending_analysis[
                     "selected_frameworks"
                 ]
@@ -1899,17 +2337,33 @@ def main():
                 st.error(f"Could not retrieve pending batch: {e}")
 
         # Analyse button (full width)
+        credentials_ready = (
+            bool(anthropic_api_key and openai_api_key)
+            if is_review_cascade
+            else bool(api_key)
+        )
         analyse_disabled = (
             (not uploaded_file and not pasted_text)
             or len(selected_frameworks) == 0
-            or not api_key
+            or not credentials_ready
             or bool(pending_batch_id)
         )
 
         if st.button(
             "Analyse Report", disabled=analyse_disabled, type="primary"
         ):
-            if not api_key:
+            if is_review_cascade and not credentials_ready:
+                missing_providers = []
+                if not anthropic_api_key:
+                    missing_providers.append("Anthropic")
+                if not openai_api_key:
+                    missing_providers.append("OpenAI")
+                st.error(
+                    "Please enter the required "
+                    + " and ".join(missing_providers)
+                    + " API key(s)"
+                )
+            elif not is_review_cascade and not api_key:
                 provider = get_model_config(selected_model_id)["provider"].title()
                 st.error(f"Please enter your {provider} API key")
             elif len(selected_frameworks) == 0:
@@ -1917,6 +2371,14 @@ def main():
             elif not uploaded_file and not pasted_text:
                 st.error("Please upload a PDF or paste text")
             else:
+                for state_key in (
+                    "analysis_results",
+                    "framework_summaries",
+                    "num_pages",
+                    "token_usage",
+                    "analysis_strategy_used",
+                ):
+                    st.session_state.pop(state_key, None)
                 if uploaded_file:
                     if page_end is not None and page_start > page_end:
                         st.error("'From page' must be \u2264 'To page'.")
@@ -1961,12 +2423,18 @@ def main():
                 report_text = format_report_text(report_pages)
 
                 selected_model = get_model_config(selected_model_id)
-                st.markdown(
-                    f"### Analysing with {selected_model['label']}..."
-                )
+                if is_review_cascade:
+                    st.markdown(
+                        "### Running reviewed cascade: Haiku → Luna → "
+                        "conditional Terra..."
+                    )
+                else:
+                    st.markdown(
+                        f"### Analysing with {selected_model['label']}..."
+                    )
                 progress_bar = st.progress(0)
 
-                if use_batch_api:
+                if use_batch_api and not is_review_cascade:
                     st.session_state.pending_analysis = {
                         "batch_id": None,
                         "provider": selected_model["provider"],
@@ -1978,25 +2446,65 @@ def main():
                     }
 
                 try:
-                    results, framework_summaries, token_usage = (
-                        run_model_analysis(
-                            report_text, selected_frameworks,
-                            api_key, framework_requirements, progress_bar,
-                            requirement_refs,
-                            report_pages=report_pages,
-                            use_batch=use_batch_api,
-                            track_pending_batch=use_batch_api,
-                            model_id=selected_model_id,
+                    if is_review_cascade:
+                        results, framework_summaries, token_usage = (
+                            run_review_cascade(
+                                report_text,
+                                selected_frameworks,
+                                anthropic_api_key,
+                                openai_api_key,
+                                framework_requirements,
+                                progress_bar,
+                                requirement_refs,
+                                report_pages=report_pages,
+                            )
                         )
-                    )
+                    else:
+                        results, framework_summaries, token_usage = (
+                            run_model_analysis(
+                                report_text, selected_frameworks,
+                                api_key, framework_requirements, progress_bar,
+                                requirement_refs,
+                                report_pages=report_pages,
+                                use_batch=use_batch_api,
+                                track_pending_batch=use_batch_api,
+                                model_id=selected_model_id,
+                            )
+                        )
                     st.session_state.analysis_results = results
                     st.session_state.framework_summaries = (
                         framework_summaries
                     )
                     st.session_state.num_pages = len(report_pages)
                     st.session_state.token_usage = token_usage
+                    st.session_state.analysis_strategy_used = (
+                        analysis_strategy
+                    )
                     st.session_state.pop("pending_analysis", None)
-                    st.success("Analysis complete!")
+                    if (
+                        is_review_cascade
+                        and not token_usage.get("cascade_complete", True)
+                    ):
+                        failed_stages = token_usage.get(
+                            "cascade_failure_stages"
+                        ) or [
+                            token_usage.get(
+                                "cascade_failure_stage", "review"
+                            )
+                        ]
+                        failed_stage = ", ".join(
+                            str(stage).replace("_", " ")
+                            for stage in failed_stages
+                        )
+                        st.warning(
+                            f"The {failed_stage} review stage(s) did not "
+                            "complete for every requirement. "
+                            "Earlier model results were retained as provisional "
+                            "items for human review; they were not silently "
+                            "re-run."
+                        )
+                    else:
+                        st.success("Analysis complete!")
                 except TimeoutError as e:
                     st.warning(str(e))
                 except AnalysisAuthenticationError as e:
@@ -2018,33 +2526,48 @@ def main():
             token_usage = st.session_state.get('token_usage', {})
 
             total_results = len(results)
+            scored_results = [
+                result
+                for result in results
+                if not is_provisional_cascade_result(result)
+            ]
+            provisional_count = total_results - len(scored_results)
             covers_count = sum(
-                1 for r in results
+                1 for r in scored_results
                 if r['classification'] == CLASSIFICATION_COVERS
             )
             partly_count = sum(
-                1 for r in results
+                1 for r in scored_results
                 if r['classification'] == CLASSIFICATION_PARTLY
             )
             doesnt_count = sum(
-                1 for r in results
+                1 for r in scored_results
                 if r['classification'] == CLASSIFICATION_DOESNT
             )
+            scored_frameworks = {
+                framework: summary
+                for framework, summary in framework_summaries.items()
+                if summary.get(
+                    "scored_total",
+                    summary.get("total", 0),
+                )
+            }
             best_fw = (
                 max(
-                    framework_summaries.items(),
+                    scored_frameworks.items(),
                     key=lambda x: x[1]['avg_score']
                 )
-                if framework_summaries else None
+                if scored_frameworks else None
             )
 
             # ── Coverage summary (donut + counts) ──
             overall_pct = (
                 sum(
                     classification_to_score(r["classification"])
-                    for r in results
-                ) / total_results * 100
-            ) if total_results else 0.0
+                    for r in scored_results
+                ) / len(scored_results) * 100
+            ) if scored_results else 0.0
+            overall_label = f"{overall_pct:.0f}%" if scored_results else "N/A"
             best_note = (
                 f'Best alignment with <strong class="t-strong">'
                 f'{best_fw[0]}</strong>.'
@@ -2065,18 +2588,20 @@ def main():
                 f'align-items:center;justify-content:center;">'
                 f'<span class="t-strong" style="font-family:\'Spectral\',serif;'
                 f'font-size:26px;font-weight:600;color:#FCFAF3;line-height:1;">'
-                f'{overall_pct:.0f}%</span>'
+                f'{overall_label}</span>'
                 f'<span class="t-soft" style="font-size:9px;color:#9FBAA8;'
                 f'letter-spacing:.05em;">OVERALL</span>'
                 f'</div></div>'
                 f'<div><p class="t-soft" style="margin:0 0 4px;font-size:13px;'
                 f'color:#9FBAA8;">'
-                f'Weighted coverage</p>'
+                f'Resolved coverage</p>'
                 f'<p class="t-strong" style="margin:0;font-size:13.5px;'
                 f'line-height:1.5;color:#FCFAF3;">Analysed '
                 f'<strong class="t-strong">{num_pages}</strong> pages '
                 f'against <strong class="t-strong">{len(framework_summaries)}</strong> frameworks '
-                f'({total_results} requirements). {best_note}</p>'
+                f'({total_results} requirements'
+                f'{f", {provisional_count} provisional and excluded from the score" if provisional_count else ""}). '
+                f'{best_note}</p>'
                 f'</div></div>'
                 f'<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
                 f'border-radius:14px;padding:18px;">'
@@ -2116,11 +2641,30 @@ def main():
                 key=lambda x: -x[1]["avg_score"]
             ):
                 cts = s.get("counts", {})
-                tot = s.get("total", 0) or 1
-                c_pct = cts.get(CLASSIFICATION_COVERS, 0) / tot * 100
-                p_pct = cts.get(CLASSIFICATION_PARTLY, 0) / tot * 100
-                d_pct = max(0.0, 100.0 - c_pct - p_pct)
+                scored_total = int(
+                    s.get("scored_total", s.get("total", 0)) or 0
+                )
+                if scored_total:
+                    c_pct = (
+                        cts.get(CLASSIFICATION_COVERS, 0)
+                        / scored_total
+                        * 100
+                    )
+                    p_pct = (
+                        cts.get(CLASSIFICATION_PARTLY, 0)
+                        / scored_total
+                        * 100
+                    )
+                    d_pct = max(0.0, 100.0 - c_pct - p_pct)
+                else:
+                    c_pct = p_pct = d_pct = 0.0
                 fw_pct = s.get("avg_score", 0) * 100
+                fw_provisional = int(s.get("provisional", 0) or 0)
+                provisional_note = (
+                    f" &middot; {fw_provisional} provisional"
+                    if fw_provisional
+                    else ""
+                )
                 bars_rows += (
                     f'<div style="margin-bottom:14px;">'
                     f'<div style="display:flex;justify-content:space-between;'
@@ -2129,7 +2673,9 @@ def main():
                     f'color:#152018;">{fw}</span>'
                     f'<span style="font-family:\'IBM Plex Mono\',monospace;'
                     f'font-size:11.5px;color:#8A9488;">{fw_pct:.0f}% &middot; '
-                    f'{s.get("total", 0)} reqs</span></div>'
+                    f'{s.get("total", 0)} reqs'
+                    f'{provisional_note}'
+                    f'</span></div>'
                     f'<div style="height:11px;border-radius:6px;overflow:hidden;'
                     f'display:flex;background:#DDD5C2;">'
                     f'<div style="width:{c_pct:.1f}%;background:#1C6B4A;"></div>'
@@ -2163,6 +2709,58 @@ def main():
                 unsafe_allow_html=True
             )
 
+            cascade_results = [
+                result for result in results
+                if is_review_cascade_result(result)
+            ]
+            if cascade_results:
+                cascade_counts = {
+                    status: sum(
+                        result.get("cascade_status") == status
+                        for result in cascade_results
+                    )
+                    for status in CASCADE_STATUS_LABELS
+                }
+                cascade_human_review = sum(
+                    result_needs_human_review(result)
+                    for result in cascade_results
+                )
+                incomplete_reviews = sum(
+                    cascade_counts.get(status, 0)
+                    for status in (
+                        "luna_review_failed",
+                        "terra_review_failed",
+                    )
+                )
+                st.markdown("### Reviewed cascade checks")
+                metric_columns = st.columns(5)
+                metric_columns[0].metric(
+                    "Haiku + Luna agree",
+                    cascade_counts["haiku_luna_agree"],
+                )
+                metric_columns[1].metric(
+                    "Terra adjudications",
+                    cascade_counts["terra_adjudicated"],
+                )
+                metric_columns[2].metric(
+                    "Three-way disagreements",
+                    cascade_counts["three_way_disagreement"],
+                )
+                metric_columns[3].metric(
+                    "Incomplete reviews",
+                    incomplete_reviews,
+                )
+                metric_columns[4].metric(
+                    "Human review",
+                    cascade_human_review,
+                )
+                if provisional_count:
+                    st.warning(
+                        f"{provisional_count} provisional cascade verdict(s) "
+                        "are excluded from coverage percentages until a human "
+                        "confirms them."
+                    )
+
             # Cost estimate
             if token_usage:
                 models_used = token_usage.get('models_used', set())
@@ -2177,6 +2775,8 @@ def main():
                     ) or get_model_config(
                         token_usage.get("selected_model", PRIMARY_MODEL)
                     )["label"]
+                    if cascade_results:
+                        model_label = f"Reviewed cascade ({model_label})"
                 except ValueError as error:
                     st.warning(
                         f"Could not estimate this saved run's cost: {error}"
@@ -2213,29 +2813,68 @@ def main():
 
             # Highest-value review queue: uncertain verdicts are surfaced
             # before the full framework-by-framework result set.
-            low_confidence = [
-                r for r in results if r.get("confidence", "low") == "low"
-            ]
-            if low_confidence:
+            human_review_results = []
+            seen_review_keys = set()
+            for result in results:
+                if not result_needs_human_review(result):
+                    continue
+                review_key = (
+                    result.get("framework", ""),
+                    result.get("requirement_id", ""),
+                    result.get("reference", ""),
+                    result.get("requirement", ""),
+                )
+                if review_key in seen_review_keys:
+                    continue
+                seen_review_keys.add(review_key)
+                human_review_results.append(result)
+
+            if human_review_results:
                 st.markdown("### Human review queue")
                 st.warning(
-                    f"{len(low_confidence)} low-confidence verdict(s) need "
-                    "review first. These may be borderline or depend on "
-                    "hard-to-read visual evidence."
+                    f"{len(human_review_results)} verdict(s) need review "
+                    "first because of low confidence, model disagreement, "
+                    "or both."
                 )
                 with st.expander(
-                    f"Review {len(low_confidence)} uncertain verdict(s)",
+                    f"Review {len(human_review_results)} uncertain verdict(s)",
                     expanded=True,
                 ):
-                    for result in low_confidence:
+                    for result in human_review_results:
+                        review_details = []
+                        if result.get("needs_human_review"):
+                            review_details.append(
+                                cascade_status_label(result)
+                                or "Cascade marked this for review"
+                            )
+                        if result.get("confidence", "low") == "low":
+                            review_details.append(
+                                result.get("confidence_reason", "")
+                                or "The model did not provide a clear "
+                                "confidence reason."
+                            )
                         st.markdown(
                             f"**{result['framework']} · "
                             f"{prettify_topic_name(result['topic'])} — "
                             f"{result['classification']}**  \n"
                             f"{result.get('requirement', '')}  \n"
-                            f"*Why uncertain:* "
-                            f"{result.get('confidence_reason', '') or 'The model did not provide a clear confidence reason.'}"
+                            f"*Why review:* {'; '.join(review_details)}"
                         )
+                        _, audit_trail = build_cascade_review_html(result)
+                        if audit_trail:
+                            st.markdown(
+                                audit_trail,
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            extracts = result.get("relevant_extracts", [])
+                            if isinstance(extracts, list) and extracts:
+                                st.markdown(
+                                    "**Evidence:**  \n"
+                                    + "  \n".join(
+                                        f"- {extract}" for extract in extracts
+                                    )
+                                )
                         st.markdown("---")
 
             # Export button
@@ -2257,7 +2896,14 @@ def main():
                 "against selected frameworks?"
             )
 
-            for framework in st.session_state.selected_frameworks:
+            analysed_frameworks = list(
+                dict.fromkeys(
+                    result["framework"]
+                    for result in results
+                    if result.get("framework")
+                )
+            )
+            for framework in analysed_frameworks:
                 fw_results = [
                     r for r in results if r['framework'] == framework
                 ]
@@ -2269,12 +2915,15 @@ def main():
                 c_count = counts.get(CLASSIFICATION_COVERS, 0)
                 p_count = counts.get(CLASSIFICATION_PARTLY, 0)
                 d_count = counts.get(CLASSIFICATION_DOESNT, 0)
-                low_count = summary.get("low_confidence", 0)
+                review_count = sum(
+                    result_needs_human_review(result)
+                    for result in fw_results
+                )
 
                 with st.expander(
                     f"**{framework}** \u2014 {c_count} covered \u00b7 "
                     f"{p_count} partly \u00b7 {d_count} not covered \u00b7 "
-                    f"{low_count} review first",
+                    f"{review_count} review first",
                     expanded=True
                 ):
                     topics_seen = []
@@ -2312,7 +2961,7 @@ def main():
                                     f'border-radius:0 4px 4px 0;'
                                     f'font-size:12px;color:#4B5A50;'
                                     f'font-style:italic;">'
-                                    f'"{ext}"</div>'
+                                    f'"{html.escape(str(ext))}"</div>'
                                     for ext in extracts
                                 )
                                 extracts_section = (
@@ -2334,6 +2983,7 @@ def main():
                             req_text = r.get("requirement", "")
                             if len(req_text) > 200:
                                 req_text = req_text[:200] + "\u2026"
+                            req_text = html.escape(str(req_text))
 
                             ref = r.get("reference", "")
                             ref_html = (
@@ -2341,7 +2991,7 @@ def main():
                                 f'font-family:monospace;background:#DDD5C2;'
                                 f'padding:1px 6px;border-radius:4px;'
                                 f'margin-right:6px;white-space:nowrap;">'
-                                f'{ref}</span>'
+                                f'{html.escape(str(ref))}</span>'
                                 if ref else ""
                             )
                             confidence = r.get("confidence", "low")
@@ -2358,8 +3008,12 @@ def main():
                                 f'{confidence_bg};color:{confidence_fg};padding:'
                                 f'3px 8px;border-radius:10px;font-size:10px;'
                                 f'font-weight:700;text-transform:uppercase;">'
-                                f'{confidence} confidence</span>'
+                                f'{html.escape(str(confidence))} confidence</span>'
                             )
+                            (
+                                cascade_badge_html,
+                                cascade_review_html,
+                            ) = build_cascade_review_html(r)
 
                             st.markdown(
                                 f'<div style="background:#EDE7D8;'
@@ -2368,23 +3022,26 @@ def main():
                                 f'{clr};">'
                                 f'<div style="display:flex;'
                                 f'justify-content:space-between;'
-                                f'align-items:flex-start;gap:12px;">'
+                                f'align-items:flex-start;gap:12px;'
+                                f'flex-wrap:wrap;">'
                                 f'<span style="font-size:13px;'
                                 f'color:#152018;flex:1;">'
                                 f'{ref_html}{req_text}</span>'
                                 f'<span class="{badge_class}" '
                                 f'style="white-space:nowrap;">'
-                                f'{classification}</span>'
+                                f'{html.escape(str(classification))}</span>'
                                 f'{confidence_html}'
+                                f'{cascade_badge_html}'
                                 f'</div>'
                                 f'{extracts_section}'
                                 f'<p style="margin:8px 0 0 0;'
                                 f'font-size:12px;color:#152018;">'
                                 f'<strong>Rationale:</strong> '
-                                f'{r.get("rationale", "")}</p>'
+                                f'{html.escape(str(r.get("rationale") or ""))}</p>'
                                 f'<p style="margin:5px 0 0 0;font-size:11px;'
                                 f'color:#4B5A50;"><strong>Confidence:</strong> '
-                                f'{r.get("confidence_reason", "")}</p>'
+                                f'{html.escape(str(r.get("confidence_reason") or ""))}</p>'
+                                f'{cascade_review_html}'
                                 f'</div>',
                                 unsafe_allow_html=True
                             )
