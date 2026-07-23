@@ -27,6 +27,12 @@ from io import BytesIO
 from collections import defaultdict
 
 import report_drafter
+from analysis_core import (
+    analyze_report_with_claude,
+    estimate_usage_cost,
+    extract_pdf_pages,
+    format_report_text,
+)
 
 # Page config
 st.set_page_config(
@@ -516,291 +522,50 @@ def classification_to_score(classification):
 # ============================================
 
 def extract_text_from_pdf(pdf_file):
-    """Extract text from PDF page by page using pymupdf"""
-    import pymupdf
-
-    pdf_bytes = pdf_file.read()
-    doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
-
-    text_list = []
-    for page_num, page in enumerate(doc):
-        text = page.get_text()
-        text_list.append(text.replace('\n', ' '))
-
-    doc.close()
-    return text_list
+    """Backward-compatible text-only PDF extraction for other app tabs."""
+    return [page["text"] for page in extract_pdf_pages(pdf_file)]
 
 
-def claude_analyze_report(report_text, selected_frameworks, api_key, framework_requirements, progress_bar=None, requirement_refs=None):
-    """
-    Use Claude to assess a report requirement-by-requirement.
+def claude_analyze_report(
+    report_text,
+    selected_frameworks,
+    api_key,
+    framework_requirements,
+    progress_bar=None,
+    requirement_refs=None,
+    report_pages=None,
+    use_batch=True,
+    existing_batch_id=None,
+    track_pending_batch=False,
+):
+    """Run the confidence-aware multimodal analysis pipeline."""
 
-    For each framework requirement, Claude:
-    1. Searches the full report for all relevant passages
-    2. Classifies how well the requirement is addressed:
-       - "Covers the framework"
-       - "Partly covers the framework"
-       - "Doesn't cover the framework"
-    3. Provides a rationale referencing the specific text found
-
-    Model strategy:
-    - Tries claude-haiku-4-5 first (cheapest: $1/$5 per MTok)
-    - Falls back to claude-sonnet-5 if Haiku hits rate limits or input size limits
-    - Once fallback is triggered, stays on Sonnet for remaining frameworks
-
-    Cost optimisation:
-    - Prompt caching: report text in system message is cached across calls
-      (cache reads are 90% cheaper than fresh input)
-    - One API call per framework batches all its requirements together
-    """
-    client = anthropic.Anthropic(api_key=api_key)
-
-    # System message with report text - this gets cached across framework calls
-    system_message = [
-        {
-            "type": "text",
-            "text": (
-                "You are an expert sustainability and ESG analyst.\n\n"
-                "You will be given a set of regulatory framework requirements. For EACH requirement, "
-                "you must:\n"
-                "1. Search the ENTIRE report below for ALL passages that address that requirement. "
-                "The relevant content may be spread across multiple sections.\n"
-                "2. Extract short verbatim quotes from the report (max ~40 words each) that are "
-                "most relevant to the requirement.\n"
-                "3. Classify how well the requirement is addressed using EXACTLY one of these three labels:\n"
-                '   - "Covers the framework" — the report comprehensively addresses this requirement '
-                "with specific, concrete content and detail.\n"
-                '   - "Partly covers the framework" — the report addresses some aspects of this '
-                "requirement but is incomplete, vague, or lacks concrete detail.\n"
-                '   - "Doesn\'t cover the framework" — the report does not meaningfully address '
-                "this requirement.\n"
-                "4. Write a rationale (2-3 sentences) explaining the classification, referencing what the "
-                "report does or does not cover.\n\n"
-                "Be rigorous. 'Covers the framework' requires specific, concrete content — not just vague "
-                "mentions. If the report only partially addresses a requirement, classify it as "
-                "'Partly covers the framework'.\n\n"
-                "REPORT TEXT:\n"
-                f"{report_text}"
-            ),
-            "cache_control": {"type": "ephemeral"}
-        }
-    ]
-
-    results = []
-    total_steps = len(selected_frameworks)
-    input_tokens_total = 0
-    output_tokens_total = 0
-    cache_read_tokens_total = 0
-    cache_write_tokens_total = 0
-    models_used = set()  # Track which models were actually used
-
-    # Model fallback order: try Haiku first (cheapest), fall back to Sonnet if rate-limited
-    PRIMARY_MODEL = "claude-haiku-4-5-20251001"
-    FALLBACK_MODEL = "claude-sonnet-5"
-    use_fallback = False  # Once we switch, stay on Sonnet for remaining frameworks
-
-    for step, framework in enumerate(selected_frameworks):
-        if framework not in framework_requirements:
-            continue
-
-        topics = framework_requirements[framework]
-        fw_full_name = FRAMEWORK_FULL_NAMES.get(framework, framework)
-
-        # --- Helper: make one API call and parse the JSON response ---
-        def _call_and_parse(prompt_text, call_model, call_max_tokens=16384):
-            """Returns (scored_items_list, usage_obj) or raises."""
-            resp = client.messages.create(
-                model=call_model,
-                max_tokens=call_max_tokens,
-                system=system_message,
-                messages=[{"role": "user", "content": prompt_text}]
-            )
-            # Check for truncation
-            if resp.stop_reason == "max_tokens":
-                raise ValueError("Response truncated (max_tokens reached)")
-
-            # Sonnet 5 runs adaptive thinking by default, so the response
-            # may lead with thinking blocks — join the text blocks only.
-            raw = "".join(
-                block.text for block in resp.content if block.type == "text"
-            ).strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[:-3]
-                raw = raw.strip()
-
-            items = json.loads(raw)
-            return items, resp.usage
-
-        # --- Build the prompt for all requirements in this framework ---
-        def _build_prompt(topic_reqs_dict):
-            """Build requirements prompt from a {topic: [reqs]} dict."""
-            refs = requirement_refs or {}
-            prompt = (
-                f"Assess the report against each requirement of the "
-                f"**{fw_full_name} ({framework})** framework.\n\n"
-                f"For each requirement below, find all relevant text in the report, "
-                f"classify it, and explain your reasoning.\n\n"
-            )
-            idx = 1
-            for t, reqs_list in topic_reqs_dict.items():
-                for req in reqs_list:
-                    ref = refs.get((framework, req), "")
-                    ref_tag = f" (Source: {ref})" if ref else ""
-                    prompt += f"{idx}. [{t}]{ref_tag} {req}\n"
-                    idx += 1
-            prompt += (
-                "\n\nRespond ONLY with a JSON array. Each element must have exactly these keys:\n"
-                "{\n"
-                ' "topic": "<topic name from the square brackets>",\n'
-                ' "reference": "<the Source reference exactly as given, or empty string if none>",\n'
-                ' "requirement": "<the requirement text>",\n'
-                ' "relevant_extracts": ["<short verbatim quote 1 from report>", "<quote 2>", ...],\n'
-                ' "classification": "<one of: Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",\n'
-                ' "rationale": "<2-3 sentence explanation referencing what the report covers or misses>"\n'
-                "}\n\n"
-                "If no relevant text exists for a requirement, set relevant_extracts to an empty array "
-                "and classification to \"Doesn't cover the framework\".\n"
-                "No markdown, no backticks, no preamble — just the raw JSON array."
-            )
-            return prompt
-
-        requirements_text = _build_prompt(topics)
-
-        # Determine which model to use
-        model = FALLBACK_MODEL if use_fallback else PRIMARY_MODEL
-        scored_items = None
-
-        try:
-            scored_items, usage = _call_and_parse(requirements_text, model)
-            models_used.add(model)
-            input_tokens_total += usage.input_tokens
-            output_tokens_total += usage.output_tokens
-            cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
-            cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
-
-        except (anthropic.RateLimitError, anthropic.APIStatusError) as e:
-            # If Haiku fails with rate limit, try Sonnet
-            if model == PRIMARY_MODEL:
-                st.warning(
-                    f"Haiku rate limit hit on {framework} — switching to Sonnet."
-                )
-                use_fallback = True
-                try:
-                    scored_items, usage = _call_and_parse(requirements_text, FALLBACK_MODEL)
-                    models_used.add(FALLBACK_MODEL)
-                    input_tokens_total += usage.input_tokens
-                    output_tokens_total += usage.output_tokens
-                    cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
-                    cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
-                except Exception as e2:
-                    st.error(f"Sonnet also failed for {framework}: {e2}")
-                    scored_items = None
-            else:
-                st.error(f"API error for {framework}: {e}")
-                scored_items = None
-
-        except (ValueError, json.JSONDecodeError):
-            # Response was truncated or couldn't parse — retry per-topic
-            scored_items = None
-
-        except anthropic.APIError as e:
-            st.error(f"API error for {framework}: {e}")
-            scored_items = None
-
-        # --- Fallback: split into per-topic calls if the full call failed ---
-        if scored_items is None and topics:
-            topic_list = list(topics.keys())
-            st.info(
-                f"Splitting {framework} into {len(topic_list)} topic-level "
-                f"calls (response was too large for a single call)..."
-            )
-            scored_items = []
-            retry_model = FALLBACK_MODEL if use_fallback else model
-            for t_name in topic_list:
-                single_topic = {t_name: topics[t_name]}
-                topic_prompt = _build_prompt(single_topic)
-                try:
-                    items, usage = _call_and_parse(topic_prompt, retry_model)
-                    scored_items.extend(items)
-                    models_used.add(retry_model)
-                    input_tokens_total += usage.input_tokens
-                    output_tokens_total += usage.output_tokens
-                    cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
-                    cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
-                except (anthropic.RateLimitError, anthropic.APIStatusError):
-                    # Switch to Sonnet for remaining topics
-                    if retry_model == PRIMARY_MODEL:
-                        use_fallback = True
-                        retry_model = FALLBACK_MODEL
-                        try:
-                            items, usage = _call_and_parse(topic_prompt, FALLBACK_MODEL)
-                            scored_items.extend(items)
-                            models_used.add(FALLBACK_MODEL)
-                            input_tokens_total += usage.input_tokens
-                            output_tokens_total += usage.output_tokens
-                            cache_read_tokens_total += getattr(usage, 'cache_read_input_tokens', 0)
-                            cache_write_tokens_total += getattr(usage, 'cache_creation_input_tokens', 0)
-                        except Exception as e2:
-                            st.warning(f"Could not analyse {framework}/{t_name}: {e2}")
-                    else:
-                        st.warning(f"Could not analyse {framework}/{t_name}")
-                except Exception as e:
-                    st.warning(f"Could not analyse {framework}/{t_name}: {e}")
-
-        # --- Process scored items ---
-        if scored_items:
-            for item in scored_items:
-                # Normalise the classification string
-                raw_class = item.get("classification", CLASSIFICATION_DOESNT).strip()
-                # Match to canonical labels (fuzzy)
-                if "covers" in raw_class.lower() and "partly" not in raw_class.lower() and "doesn" not in raw_class.lower():
-                    classification = CLASSIFICATION_COVERS
-                elif "partly" in raw_class.lower():
-                    classification = CLASSIFICATION_PARTLY
-                else:
-                    classification = CLASSIFICATION_DOESNT
-
-                results.append({
-                    "framework": framework,
-                    "topic": item["topic"],
-                    "reference": item.get("reference", ""),
-                    "requirement": item.get("requirement", ""),
-                    "relevant_extracts": item.get("relevant_extracts", []),
-                    "classification": classification,
-                    "rationale": item.get("rationale", "")
-                })
-
+    def update_progress(value):
         if progress_bar:
-            progress_bar.progress((step + 1) / total_steps)
+            progress_bar.progress(value)
 
-    # Calculate framework-level coverage summaries
-    framework_summaries = {}
-    for framework in selected_frameworks:
-        fw_results = [r for r in results if r["framework"] == framework]
-        if fw_results:
-            counts = {c: 0 for c in ALL_CLASSIFICATIONS}
-            for r in fw_results:
-                counts[r["classification"]] = counts.get(r["classification"], 0) + 1
-            total = len(fw_results)
-            avg_score = sum(classification_to_score(r["classification"]) for r in fw_results) / total
-            framework_summaries[framework] = {
-                "counts": counts,
-                "total": total,
-                "avg_score": avg_score,
-            }
+    def show_status(level, message):
+        getattr(st, level, st.info)(message)
 
-    # Token usage summary
-    token_usage = {
-        "input_tokens": input_tokens_total,
-        "output_tokens": output_tokens_total,
-        "cache_read_tokens": cache_read_tokens_total,
-        "cache_write_tokens": cache_write_tokens_total,
-        "models_used": models_used,
-    }
+    def remember_batch_id(batch_id):
+        pending = st.session_state.get("pending_analysis")
+        if pending is not None:
+            pending["batch_id"] = batch_id
 
-    return results, framework_summaries, token_usage
+    return analyze_report_with_claude(
+        report_text=report_text,
+        selected_frameworks=selected_frameworks,
+        api_key=api_key,
+        framework_requirements=framework_requirements,
+        framework_full_names=FRAMEWORK_FULL_NAMES,
+        requirement_refs=requirement_refs,
+        report_pages=report_pages,
+        use_batch=use_batch,
+        existing_batch_id=existing_batch_id,
+        batch_id_callback=(remember_batch_id if track_pending_batch else None),
+        progress_callback=update_progress,
+        status_callback=show_status,
+    )
 
 
 def get_explanation(score):
@@ -867,7 +632,10 @@ def generate_results_excel(results, framework_summaries):
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
-    summary_headers = ["Framework", "Covers", "Partly Covers", "Doesn't Cover", "Total Requirements"]
+    summary_headers = [
+        "Framework", "Covers", "Partly Covers", "Doesn't Cover",
+        "Total Requirements", "Low-confidence Review",
+    ]
     for col, h in enumerate(summary_headers, 1):
         cell = ws_summary.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -889,14 +657,20 @@ def generate_results_excel(results, framework_summaries):
         d_cell.fill = red_fill
         d_cell.border = thin_border
         ws_summary.cell(row=row, column=5, value=s.get("total", 0)).border = thin_border
+        ws_summary.cell(
+            row=row, column=6, value=s.get("low_confidence", 0)
+        ).border = thin_border
         row += 1
 
-    for col_letter in ["A", "B", "C", "D", "E"]:
+    for col_letter in ["A", "B", "C", "D", "E", "F"]:
         ws_summary.column_dimensions[col_letter].width = 22
 
     # --- Sheet 2: Detailed Results ---
     ws_detail = wb.create_sheet("Detailed Results")
-    detail_headers = ["Framework", "Topic", "Reference", "Requirement", "Classification", "Rationale", "Relevant Extracts"]
+    detail_headers = [
+        "Framework", "Topic", "Reference", "Requirement", "Classification",
+        "Confidence", "Confidence Reason", "Rationale", "Relevant Extracts",
+    ]
     for col, h in enumerate(detail_headers, 1):
         cell = ws_detail.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -921,9 +695,22 @@ def generate_results_excel(results, framework_summaries):
             class_cell.fill = red_fill
         class_cell.border = thin_border
 
-        ws_detail.cell(row=i, column=6, value=r.get("rationale", "")).border = thin_border
+        confidence_cell = ws_detail.cell(
+            row=i, column=6, value=r.get("confidence", "low").title()
+        )
+        if r.get("confidence") == "low":
+            confidence_cell.fill = red_fill
+        elif r.get("confidence") == "medium":
+            confidence_cell.fill = amber_fill
+        else:
+            confidence_cell.fill = green_fill
+        confidence_cell.border = thin_border
         ws_detail.cell(
-            row=i, column=7,
+            row=i, column=7, value=r.get("confidence_reason", "")
+        ).border = thin_border
+        ws_detail.cell(row=i, column=8, value=r.get("rationale", "")).border = thin_border
+        ws_detail.cell(
+            row=i, column=9,
             value="; ".join(r.get("relevant_extracts", []))
         ).border = thin_border
 
@@ -932,8 +719,10 @@ def generate_results_excel(results, framework_summaries):
     ws_detail.column_dimensions["C"].width = 18
     ws_detail.column_dimensions["D"].width = 50
     ws_detail.column_dimensions["E"].width = 26
-    ws_detail.column_dimensions["F"].width = 50
-    ws_detail.column_dimensions["G"].width = 50
+    ws_detail.column_dimensions["F"].width = 15
+    ws_detail.column_dimensions["G"].width = 40
+    ws_detail.column_dimensions["H"].width = 50
+    ws_detail.column_dimensions["I"].width = 50
 
     # --- Sheet 3: Gap Analysis ---
     ws_gap = wb.create_sheet("Gap Analysis")
@@ -1912,15 +1701,25 @@ def main():
                 f"**{len(selected_frameworks)}** framework(s) selected "
                 f"\u00b7 **{total_reqs}** requirements"
             )
-            if selected_frameworks:
-                st.markdown(
-                    f"*Estimated time: "
-                    f"~{len(selected_frameworks) * 8} seconds "
-                    f"(1 API call per framework)*"
-                )
 
         with upload_col:
             st.markdown("**Upload Document**")
+            use_vision = st.checkbox(
+                "Use vision for charts and image-based tables",
+                value=True,
+                help=(
+                    "Renders up to 30 visually dense or scanned pages and sends "
+                    "them to Claude alongside page-tagged extracted text."
+                ),
+            )
+            use_batch_api = st.checkbox(
+                "Use Anthropic Message Batches (50% API discount)",
+                value=True,
+                help=(
+                    "Submits the independent framework assessments together. "
+                    "Batch processing can take longer than standard requests."
+                ),
+            )
             uploaded_file = st.file_uploader(
                 "Choose a PDF file", type="pdf",
                 help="Upload your ESG report or transition plan PDF"
@@ -1959,11 +1758,70 @@ def main():
                 placeholder="Paste your ESG report content..."
             )
 
+        # A submitted batch can outlive a Streamlit run. Keep enough context in
+        # session state to retrieve it without creating and paying for another.
+        pending_analysis = st.session_state.get("pending_analysis")
+        pending_batch_id = (
+            pending_analysis.get("batch_id") if pending_analysis else None
+        )
+        resume_pending = False
+        if pending_batch_id:
+            st.warning(
+                f"Message Batch `{pending_batch_id}` is still available. "
+                "Resume it instead of submitting the report again."
+            )
+            resume_col, clear_col = st.columns(2)
+            with resume_col:
+                resume_pending = st.button(
+                    "Resume Pending Batch", type="primary", disabled=not api_key
+                )
+            with clear_col:
+                if st.button("Clear Pending Reference"):
+                    st.session_state.pop("pending_analysis", None)
+                    pending_analysis = None
+                    pending_batch_id = None
+
+        if resume_pending and pending_analysis:
+            st.markdown("### Retrieving Message Batch...")
+            resume_progress = st.progress(0)
+            try:
+                results, framework_summaries, token_usage = (
+                    claude_analyze_report(
+                        pending_analysis["report_text"],
+                        pending_analysis["selected_frameworks"],
+                        api_key,
+                        framework_requirements,
+                        resume_progress,
+                        requirement_refs,
+                        report_pages=pending_analysis["report_pages"],
+                        use_batch=True,
+                        existing_batch_id=pending_batch_id,
+                        track_pending_batch=True,
+                    )
+                )
+                st.session_state.analysis_results = results
+                st.session_state.framework_summaries = framework_summaries
+                st.session_state.num_pages = pending_analysis["num_pages"]
+                st.session_state.token_usage = token_usage
+                st.session_state.selected_frameworks = pending_analysis[
+                    "selected_frameworks"
+                ]
+                st.session_state.pop("pending_analysis", None)
+                pending_batch_id = None
+                st.success("Batch analysis complete!")
+            except TimeoutError as e:
+                st.warning(str(e))
+            except anthropic.AuthenticationError:
+                st.error("Invalid Anthropic API key for the pending batch.")
+            except Exception as e:
+                st.error(f"Could not retrieve pending batch: {e}")
+
         # Analyse button (full width)
         analyse_disabled = (
             (not uploaded_file and not pasted_text)
             or len(selected_frameworks) == 0
             or not api_key
+            or bool(pending_batch_id)
         )
 
         if st.button(
@@ -1982,48 +1840,78 @@ def main():
                         st.stop()
                     with st.spinner("Extracting text from PDF..."):
                         try:
-                            text_list = extract_text_from_pdf(uploaded_file)
-                            total = len(text_list)
-                            start_idx = max(0, page_start - 1)
-                            end_idx = (
-                                page_end if page_end is not None else total
+                            report_pages = extract_pdf_pages(
+                                uploaded_file,
+                                first_page=page_start,
+                                last_page=page_end,
+                                include_vision=use_vision,
+                                max_vision_pages=30,
                             )
-                            text_list = text_list[start_idx:end_idx]
+                            total = total_pages
+                            end_idx = page_end if page_end is not None else total
+                            vision_page_count = sum(
+                                bool(page.get("image_base64"))
+                                for page in report_pages
+                            )
                             st.success(
                                 f"Analysing pages {page_start}\u2013{end_idx} "
-                                f"({len(text_list)} of {total} pages)"
+                                f"({len(report_pages)} of {total} pages)"
                             )
+                            if use_vision:
+                                st.info(
+                                    f"Vision enabled for {vision_page_count} "
+                                    "visually dense/scanned pages."
+                                )
                         except Exception as e:
                             st.error(f"Failed to extract PDF: {e}")
                             st.stop()
                 else:
-                    text_list = [
-                        p.strip().replace('\n', ' ')
-                        for p in pasted_text.split('\n\n') if p.strip()
+                    report_pages = [
+                        {"page_number": i, "text": paragraph.strip()}
+                        for i, paragraph in enumerate(
+                            (p for p in pasted_text.split('\n\n') if p.strip()),
+                            start=1,
+                        )
                     ]
-                    st.info(f"Processing {len(text_list)} paragraphs")
+                    st.info(f"Processing {len(report_pages)} text sections")
 
-                report_text = "\n\n".join(text_list)
+                report_text = format_report_text(report_pages)
 
                 st.markdown("### Analysing with Claude...")
                 progress_bar = st.progress(0)
+
+                if use_batch_api:
+                    st.session_state.pending_analysis = {
+                        "batch_id": None,
+                        "report_text": report_text,
+                        "report_pages": report_pages,
+                        "selected_frameworks": list(selected_frameworks),
+                        "num_pages": len(report_pages),
+                    }
 
                 try:
                     results, framework_summaries, token_usage = (
                         claude_analyze_report(
                             report_text, selected_frameworks,
                             api_key, framework_requirements, progress_bar,
-                            requirement_refs
+                            requirement_refs,
+                            report_pages=report_pages,
+                            use_batch=use_batch_api,
+                            track_pending_batch=use_batch_api,
                         )
                     )
                     st.session_state.analysis_results = results
                     st.session_state.framework_summaries = (
                         framework_summaries
                     )
-                    st.session_state.num_pages = len(text_list)
+                    st.session_state.num_pages = len(report_pages)
                     st.session_state.token_usage = token_usage
+                    st.session_state.pop("pending_analysis", None)
                     st.success("Analysis complete!")
+                except TimeoutError as e:
+                    st.warning(str(e))
                 except anthropic.AuthenticationError:
+                    st.session_state.pop("pending_analysis", None)
                     st.error(
                         "Invalid API key. Please check your "
                         "Anthropic API key."
@@ -2197,48 +2085,46 @@ def main():
 
                 if used_sonnet and used_haiku:
                     model_label = "Haiku 4.5 + Sonnet 5 (fallback)"
-                    input_rate, output_rate = 3.0, 15.0
                 elif used_sonnet:
                     model_label = "Sonnet 5 (fallback)"
-                    input_rate, output_rate = 3.0, 15.0
                 else:
                     model_label = "Haiku 4.5"
-                    input_rate, output_rate = 1.0, 5.0
 
-                input_cost = (
-                    token_usage.get('input_tokens', 0)
-                    / 1_000_000 * input_rate
-                )
-                output_cost = (
-                    token_usage.get('output_tokens', 0)
-                    / 1_000_000 * output_rate
-                )
-                cache_reads = token_usage.get('cache_read_tokens', 0)
-                cache_savings = (
-                    cache_reads / 1_000_000 * (input_rate * 0.9)
-                )
-                total_cost = input_cost + output_cost
+                usage_records = token_usage.get("usage_records", [])
+                total_cost, cache_savings = estimate_usage_cost(usage_records)
 
                 model_note = ""
                 if used_sonnet and used_haiku:
                     model_note = (
                         "<br><em style='font-size:12px;color:#C98A2B;'>"
                         "\u26a0 Haiku hit rate limits \u2014 some frameworks "
-                        "analysed with Sonnet. Cost shown is upper-bound "
-                        "estimate.</em>"
+                        "analysed with Sonnet. Cost uses conservative "
+                        "post-promotional Sonnet rates.</em>"
                     )
                 elif used_sonnet:
                     model_note = (
                         "<br><em style='font-size:12px;color:#C98A2B;'>"
                         "\u26a0 Haiku rate-limited \u2014 all frameworks "
-                        "analysed with Sonnet.</em>"
+                        "analysed with Sonnet. Cost uses conservative "
+                        "post-promotional rates.</em>"
                     )
 
-                itok = token_usage.get("input_tokens", 0)
+                itok = (
+                    token_usage.get("input_tokens", 0)
+                    + token_usage.get("cache_read_tokens", 0)
+                    + token_usage.get("cache_write_tokens", 0)
+                )
                 otok = token_usage.get("output_tokens", 0)
                 cache_str = (
                     f" \u00b7 Cache saved ~${cache_savings:.4f}"
-                    if cache_reads > 0 else ""
+                    if cache_savings > 0 else ""
+                )
+                batch_str = (
+                    " \u00b7 Message Batch 50% pricing applied"
+                    if any(
+                        record.get("batch_priced")
+                        for record in usage_records
+                    ) else ""
                 )
                 st.markdown(
                     f'<div style="background:#EDE7D8;border:1px solid '
@@ -2247,10 +2133,37 @@ def main():
                     f'<strong>Model:</strong> {model_label} \u00b7 '
                     f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
                     f'({itok:,} input / {otok:,} output tokens)'
-                    f'{cache_str}{model_note}'
+                    f'{cache_str}{batch_str}{model_note}'
                     f'</div>',
                     unsafe_allow_html=True
                 )
+
+            # Highest-value review queue: uncertain verdicts are surfaced
+            # before the full framework-by-framework result set.
+            low_confidence = [
+                r for r in results if r.get("confidence", "low") == "low"
+            ]
+            if low_confidence:
+                st.markdown("### Human review queue")
+                st.warning(
+                    f"{len(low_confidence)} low-confidence verdict(s) need "
+                    "review first. These may be borderline or depend on "
+                    "hard-to-read visual evidence."
+                )
+                with st.expander(
+                    f"Review {len(low_confidence)} uncertain verdict(s)",
+                    expanded=True,
+                ):
+                    for result in low_confidence:
+                        st.markdown(
+                            f"**{result['framework']} · "
+                            f"{prettify_topic_name(result['topic'])} — "
+                            f"{result['classification']}**  \n"
+                            f"{result.get('requirement', '')}  \n"
+                            f"*Why uncertain:* "
+                            f"{result.get('confidence_reason', '') or 'The model did not provide a clear confidence reason.'}"
+                        )
+                        st.markdown("---")
 
             # Export button
             excel_data = generate_results_excel(results, framework_summaries)
@@ -2283,10 +2196,12 @@ def main():
                 c_count = counts.get(CLASSIFICATION_COVERS, 0)
                 p_count = counts.get(CLASSIFICATION_PARTLY, 0)
                 d_count = counts.get(CLASSIFICATION_DOESNT, 0)
+                low_count = summary.get("low_confidence", 0)
 
                 with st.expander(
                     f"**{framework}** \u2014 {c_count} covered \u00b7 "
-                    f"{p_count} partly \u00b7 {d_count} not covered",
+                    f"{p_count} partly \u00b7 {d_count} not covered \u00b7 "
+                    f"{low_count} review first",
                     expanded=True
                 ):
                     topics_seen = []
@@ -2298,6 +2213,12 @@ def main():
                         topic_results = [
                             r for r in fw_results if r["topic"] == topic
                         ]
+                        confidence_order = {"low": 0, "medium": 1, "high": 2}
+                        topic_results.sort(
+                            key=lambda item: confidence_order.get(
+                                item.get("confidence", "low"), 0
+                            )
+                        )
                         st.markdown(f"**{prettify_topic_name(topic)}**")
 
                         for r in topic_results:
@@ -2350,6 +2271,22 @@ def main():
                                 f'{ref}</span>'
                                 if ref else ""
                             )
+                            confidence = r.get("confidence", "low")
+                            confidence_colors = {
+                                "low": ("#F8E3DD", "#B4472F"),
+                                "medium": ("#FBF0D8", "#977322"),
+                                "high": ("#E8F2EA", "#1C6B4A"),
+                            }
+                            confidence_bg, confidence_fg = confidence_colors.get(
+                                confidence, confidence_colors["low"]
+                            )
+                            confidence_html = (
+                                f'<span style="white-space:nowrap;background:'
+                                f'{confidence_bg};color:{confidence_fg};padding:'
+                                f'3px 8px;border-radius:10px;font-size:10px;'
+                                f'font-weight:700;text-transform:uppercase;">'
+                                f'{confidence} confidence</span>'
+                            )
 
                             st.markdown(
                                 f'<div style="background:#EDE7D8;'
@@ -2365,12 +2302,16 @@ def main():
                                 f'<span class="{badge_class}" '
                                 f'style="white-space:nowrap;">'
                                 f'{classification}</span>'
+                                f'{confidence_html}'
                                 f'</div>'
                                 f'{extracts_section}'
                                 f'<p style="margin:8px 0 0 0;'
                                 f'font-size:12px;color:#152018;">'
                                 f'<strong>Rationale:</strong> '
                                 f'{r.get("rationale", "")}</p>'
+                                f'<p style="margin:5px 0 0 0;font-size:11px;'
+                                f'color:#4B5A50;"><strong>Confidence:</strong> '
+                                f'{r.get("confidence_reason", "")}</p>'
                                 f'</div>',
                                 unsafe_allow_html=True
                             )
@@ -2541,25 +2482,25 @@ def main():
                 st.error("Please select at least one framework")
             else:
                 with st.spinner(f"Extracting text from {cmp_name_a}..."):
-                    text_a = extract_text_from_pdf(cmp_file_a)
-                    start_a = max(0, cmp_page_start_a - 1)
-                    end_a = (
-                        cmp_page_end_a
-                        if cmp_page_end_a else len(text_a)
+                    pages_a = extract_pdf_pages(
+                        cmp_file_a,
+                        first_page=cmp_page_start_a,
+                        last_page=cmp_page_end_a,
+                        include_vision=True,
+                        max_vision_pages=20,
                     )
-                    text_a = text_a[start_a:end_a]
 
                 with st.spinner(f"Extracting text from {cmp_name_b}..."):
-                    text_b = extract_text_from_pdf(cmp_file_b)
-                    start_b = max(0, cmp_page_start_b - 1)
-                    end_b = (
-                        cmp_page_end_b
-                        if cmp_page_end_b else len(text_b)
+                    pages_b = extract_pdf_pages(
+                        cmp_file_b,
+                        first_page=cmp_page_start_b,
+                        last_page=cmp_page_end_b,
+                        include_vision=True,
+                        max_vision_pages=20,
                     )
-                    text_b = text_b[start_b:end_b]
 
-                report_a = "\n\n".join(text_a)
-                report_b = "\n\n".join(text_b)
+                report_a = format_report_text(pages_a)
+                report_b = format_report_text(pages_b)
 
                 st.markdown(f"### Analysing {cmp_name_a}...")
                 progress_a = st.progress(0)
@@ -2568,7 +2509,8 @@ def main():
                         claude_analyze_report(
                             report_a, cmp_selected, cmp_api_key,
                             framework_requirements, progress_a,
-                            requirement_refs
+                            requirement_refs,
+                            report_pages=pages_a,
                         )
                     )
                 except Exception as e:
@@ -2582,7 +2524,8 @@ def main():
                         claude_analyze_report(
                             report_b, cmp_selected, cmp_api_key,
                             framework_requirements, progress_b,
-                            requirement_refs
+                            requirement_refs,
+                            report_pages=pages_b,
                         )
                     )
                 except Exception as e:
