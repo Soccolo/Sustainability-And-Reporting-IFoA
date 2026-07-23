@@ -199,6 +199,23 @@ def cascade_item(
 
 
 class AnalysisCoreTests(unittest.TestCase):
+    def test_optional_openai_loader_catches_nested_import_error(self):
+        real_import = __import__
+
+        def import_with_broken_openai(name, *args, **kwargs):
+            if name == "openai":
+                raise ImportError("simulated SDK dependency failure")
+            return real_import(name, *args, **kwargs)
+
+        with patch(
+            "builtins.__import__",
+            side_effect=import_with_broken_openai,
+        ):
+            module, error = analysis_core._load_optional_openai()
+
+        self.assertIsNone(module)
+        self.assertIsInstance(error, ImportError)
+
     def test_page_text_and_vision_blocks_keep_page_identity(self):
         pages = [
             {"page_number": 7, "text": "Emissions table", "image_base64": "abc"},
