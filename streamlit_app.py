@@ -2,8 +2,8 @@
 Sustainability Framework Analyser - Streamlit App
 Deploy to Streamlit Cloud for free public access.
 
-Uses Claude Haiku 4.5 API for intelligent report analysis
-against sustainability framework requirements.
+Supports Claude Haiku 4.5 and OpenAI GPT-5.6 models for intelligent report
+analysis against sustainability framework requirements.
 
 Requirements are loaded from ReportingFrameworks_v1.xlsx (in the project repo).
 """
@@ -22,16 +22,21 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import json
-import anthropic
 from io import BytesIO
 from collections import defaultdict
 
 import report_drafter
 from analysis_core import (
-    analyze_report_with_claude,
+    AnalysisAuthenticationError,
+    MODEL_CATALOG,
+    PRIMARY_MODEL,
+    USER_SELECTABLE_MODELS,
+    analyze_report,
     estimate_usage_cost,
     extract_pdf_pages,
     format_report_text,
+    get_model_config,
+    model_picker_label,
 )
 
 # Page config
@@ -526,7 +531,7 @@ def extract_text_from_pdf(pdf_file):
     return [page["text"] for page in extract_pdf_pages(pdf_file)]
 
 
-def claude_analyze_report(
+def run_model_analysis(
     report_text,
     selected_frameworks,
     api_key,
@@ -537,6 +542,7 @@ def claude_analyze_report(
     use_batch=True,
     existing_batch_id=None,
     track_pending_batch=False,
+    model_id=PRIMARY_MODEL,
 ):
     """Run the confidence-aware multimodal analysis pipeline."""
 
@@ -552,7 +558,7 @@ def claude_analyze_report(
         if pending is not None:
             pending["batch_id"] = batch_id
 
-    return analyze_report_with_claude(
+    return analyze_report(
         report_text=report_text,
         selected_frameworks=selected_frameworks,
         api_key=api_key,
@@ -565,6 +571,59 @@ def claude_analyze_report(
         batch_id_callback=(remember_batch_id if track_pending_batch else None),
         progress_callback=update_progress,
         status_callback=show_status,
+        model_id=model_id,
+    )
+
+
+def render_model_api_key(model_id, widget_key):
+    """Render the credential field belonging to the selected provider."""
+    model = get_model_config(model_id)
+    provider = "Anthropic" if model["provider"] == "anthropic" else "OpenAI"
+    secret_name = model["secret_name"]
+    secrets_key = st.secrets.get(secret_name, "")
+    if secrets_key:
+        st.markdown(
+            '<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
+            'border-radius:8px;padding:10px;font-size:13px;color:#1C6B4A;">'
+            f'API key configured for {provider}</div>',
+            unsafe_allow_html=True,
+        )
+        return secrets_key
+
+    placeholder = "sk-ant-..." if provider == "Anthropic" else "sk-..."
+    console = (
+        "console.anthropic.com"
+        if provider == "Anthropic"
+        else "platform.openai.com/api-keys"
+    )
+    return st.text_input(
+        f"{provider} API Key",
+        type="password",
+        placeholder=placeholder,
+        help=(
+            f"Required for {model['label']}. Your key is not stored. "
+            f"Get one at {console}"
+        ),
+        key=widget_key,
+    )
+
+
+def render_model_price_caption(model_id):
+    """Show standard, cached, and batch list prices next to the picker."""
+    model = get_model_config(model_id)
+    long_context_note = (
+        " Inputs above 272K tokens use higher long-context rates."
+        if model.get("long_context_threshold")
+        else ""
+    )
+    st.caption(
+        f"{model['description']}. USD per 1M tokens — standard: "
+        f"${model['input_price']:g} input / ${model['output_price']:g} "
+        f"output; cache read / write: ${model['cached_input_price']:g} / "
+        f"${model['cache_write_price']:g}; Batch API: "
+        f"${model['batch_input_price']:g} input / "
+        f"${model['batch_output_price']:g} output. Vision and reasoning "
+        f"change token usage.{long_context_note}"
     )
 
 
@@ -1612,15 +1671,27 @@ def main():
     # TAB 2: REPORT ANALYSER (single-column)
     # ============================================
     with tab2:
+        pending_analysis = st.session_state.get("pending_analysis")
+        pending_batch_id = (
+            pending_analysis.get("batch_id") if pending_analysis else None
+        )
+        pending_model_id = (
+            pending_analysis.get("model_id", PRIMARY_MODEL)
+            if pending_analysis
+            else PRIMARY_MODEL
+        )
+        if pending_model_id not in USER_SELECTABLE_MODELS:
+            pending_model_id = PRIMARY_MODEL
+        if pending_batch_id:
+            st.session_state["analysis_model_id"] = pending_model_id
+
         st.header("ESG Report Analyser")
         st.markdown(
             "Upload your transition plan or ESG report PDF to analyse how "
-            "well it aligns with sustainability frameworks. Uses "
-            "**Claude Haiku 4.5** to classify your report "
-            "requirement-by-requirement (falls back to **Sonnet 5** for "
-            "large documents) \u2014 finding relevant text across the full "
-            "document, classifying coverage, and providing a rationale "
-            "for each."
+            "well it aligns with sustainability frameworks. Choose Claude "
+            "Haiku 4.5, GPT-5.6 Luna, or GPT-5.6 Terra; the selected model "
+            "is used for every framework without a hidden cross-model "
+            "fallback."
         )
 
         # --- All controls on one row ---
@@ -1628,25 +1699,23 @@ def main():
         api_col, upload_col = st.columns([1, 1])
 
         with api_col:
-            # Use Streamlit Secrets if configured, otherwise show input
-            secrets_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-            if secrets_key:
-                api_key = secrets_key
-                st.markdown(
-                    '<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
-                    'border-radius:8px;padding:10px;font-size:13px;color:#1C6B4A;">'
-                    '✓ API key configured</div>',
-                    unsafe_allow_html=True
-                )
-            else:
-                api_key = st.text_input(
-                    "Anthropic API Key", type="password",
-                    placeholder="sk-ant-...",
-                    help=(
-                        "Required for analysis. Your key is not stored. "
-                        "Get one at console.anthropic.com"
-                    )
-                )
+            selected_model_id = st.selectbox(
+                "Analysis model",
+                options=USER_SELECTABLE_MODELS,
+                index=0,
+                format_func=model_picker_label,
+                key="analysis_model_id",
+                disabled=bool(pending_batch_id),
+                help=(
+                    "A pending batch locks its original provider and model "
+                    "until it is resumed or cleared."
+                ),
+            )
+            render_model_price_caption(selected_model_id)
+            selected_provider = get_model_config(selected_model_id)["provider"]
+            api_key = render_model_api_key(
+                selected_model_id, f"analysis_{selected_provider}_api_key"
+            )
 
             st.markdown("**Select Frameworks**")
             available_frameworks = (
@@ -1709,15 +1778,15 @@ def main():
                 value=True,
                 help=(
                     "Renders up to 30 visually dense or scanned pages and sends "
-                    "them to Claude alongside page-tagged extracted text."
+                    "them to the selected model alongside page-tagged text."
                 ),
             )
             use_batch_api = st.checkbox(
-                "Use Anthropic Message Batches (50% API discount)",
+                "Use Batch API (50% token discount)",
                 value=True,
                 help=(
-                    "Submits the independent framework assessments together. "
-                    "Batch processing can take longer than standard requests."
+                    "Uses Anthropic Message Batches or OpenAI Batch, depending "
+                    "on the selected model. Processing can take up to 24 hours."
                 ),
             )
             uploaded_file = st.file_uploader(
@@ -1766,9 +1835,10 @@ def main():
         )
         resume_pending = False
         if pending_batch_id:
+            pending_label = get_model_config(pending_model_id)["label"]
             st.warning(
-                f"Message Batch `{pending_batch_id}` is still available. "
-                "Resume it instead of submitting the report again."
+                f"Batch `{pending_batch_id}` for {pending_label} is still "
+                "available. Resume it instead of submitting the report again."
             )
             resume_col, clear_col = st.columns(2)
             with resume_col:
@@ -1782,11 +1852,11 @@ def main():
                     pending_batch_id = None
 
         if resume_pending and pending_analysis:
-            st.markdown("### Retrieving Message Batch...")
+            st.markdown("### Retrieving Batch...")
             resume_progress = st.progress(0)
             try:
                 results, framework_summaries, token_usage = (
-                    claude_analyze_report(
+                    run_model_analysis(
                         pending_analysis["report_text"],
                         pending_analysis["selected_frameworks"],
                         api_key,
@@ -1797,6 +1867,7 @@ def main():
                         use_batch=True,
                         existing_batch_id=pending_batch_id,
                         track_pending_batch=True,
+                        model_id=pending_model_id,
                     )
                 )
                 st.session_state.analysis_results = results
@@ -1811,8 +1882,8 @@ def main():
                 st.success("Batch analysis complete!")
             except TimeoutError as e:
                 st.warning(str(e))
-            except anthropic.AuthenticationError:
-                st.error("Invalid Anthropic API key for the pending batch.")
+            except AnalysisAuthenticationError as e:
+                st.error(str(e))
             except Exception as e:
                 st.error(f"Could not retrieve pending batch: {e}")
 
@@ -1828,7 +1899,8 @@ def main():
             "Analyse Report", disabled=analyse_disabled, type="primary"
         ):
             if not api_key:
-                st.error("Please enter your Anthropic API key")
+                provider = get_model_config(selected_model_id)["provider"].title()
+                st.error(f"Please enter your {provider} API key")
             elif len(selected_frameworks) == 0:
                 st.error("Please select at least one framework")
             elif not uploaded_file and not pasted_text:
@@ -1877,12 +1949,17 @@ def main():
 
                 report_text = format_report_text(report_pages)
 
-                st.markdown("### Analysing with Claude...")
+                selected_model = get_model_config(selected_model_id)
+                st.markdown(
+                    f"### Analysing with {selected_model['label']}..."
+                )
                 progress_bar = st.progress(0)
 
                 if use_batch_api:
                     st.session_state.pending_analysis = {
                         "batch_id": None,
+                        "provider": selected_model["provider"],
+                        "model_id": selected_model_id,
                         "report_text": report_text,
                         "report_pages": report_pages,
                         "selected_frameworks": list(selected_frameworks),
@@ -1891,13 +1968,14 @@ def main():
 
                 try:
                     results, framework_summaries, token_usage = (
-                        claude_analyze_report(
+                        run_model_analysis(
                             report_text, selected_frameworks,
                             api_key, framework_requirements, progress_bar,
                             requirement_refs,
                             report_pages=report_pages,
                             use_batch=use_batch_api,
                             track_pending_batch=use_batch_api,
+                            model_id=selected_model_id,
                         )
                     )
                     st.session_state.analysis_results = results
@@ -1910,12 +1988,9 @@ def main():
                     st.success("Analysis complete!")
                 except TimeoutError as e:
                     st.warning(str(e))
-                except anthropic.AuthenticationError:
+                except AnalysisAuthenticationError as e:
                     st.session_state.pop("pending_analysis", None)
-                    st.error(
-                        "Invalid API key. Please check your "
-                        "Anthropic API key."
-                    )
+                    st.error(str(e))
                 except Exception as e:
                     st.error(f"Analysis failed: {e}")
 
@@ -2080,63 +2155,50 @@ def main():
             # Cost estimate
             if token_usage:
                 models_used = token_usage.get('models_used', set())
-                used_sonnet = "claude-sonnet-5" in models_used
-                used_haiku = "claude-haiku-4-5-20251001" in models_used
-
-                if used_sonnet and used_haiku:
-                    model_label = "Haiku 4.5 + Sonnet 5 (fallback)"
-                elif used_sonnet:
-                    model_label = "Sonnet 5 (fallback)"
-                else:
-                    model_label = "Haiku 4.5"
-
                 usage_records = token_usage.get("usage_records", [])
-                total_cost, cache_savings = estimate_usage_cost(usage_records)
-
-                model_note = ""
-                if used_sonnet and used_haiku:
-                    model_note = (
-                        "<br><em style='font-size:12px;color:#C98A2B;'>"
-                        "\u26a0 Haiku hit rate limits \u2014 some frameworks "
-                        "analysed with Sonnet. Cost uses conservative "
-                        "post-promotional Sonnet rates.</em>"
+                try:
+                    total_cost, cache_savings = estimate_usage_cost(
+                        usage_records
                     )
-                elif used_sonnet:
-                    model_note = (
-                        "<br><em style='font-size:12px;color:#C98A2B;'>"
-                        "\u26a0 Haiku rate-limited \u2014 all frameworks "
-                        "analysed with Sonnet. Cost uses conservative "
-                        "post-promotional rates.</em>"
+                    model_label = " + ".join(
+                        get_model_config(model_id)["label"]
+                        for model_id in sorted(models_used)
+                    ) or get_model_config(
+                        token_usage.get("selected_model", PRIMARY_MODEL)
+                    )["label"]
+                except ValueError as error:
+                    st.warning(
+                        f"Could not estimate this saved run's cost: {error}"
                     )
-
-                itok = (
-                    token_usage.get("input_tokens", 0)
-                    + token_usage.get("cache_read_tokens", 0)
-                    + token_usage.get("cache_write_tokens", 0)
-                )
-                otok = token_usage.get("output_tokens", 0)
-                cache_str = (
-                    f" \u00b7 Cache saved ~${cache_savings:.4f}"
-                    if cache_savings > 0 else ""
-                )
-                batch_str = (
-                    " \u00b7 Message Batch 50% pricing applied"
-                    if any(
-                        record.get("batch_priced")
-                        for record in usage_records
-                    ) else ""
-                )
-                st.markdown(
-                    f'<div style="background:#EDE7D8;border:1px solid '
-                    f'#DDD5C2;border-radius:8px;padding:12px;'
-                    f'margin-bottom:16px;font-size:13px;color:#3B4A40;">'
-                    f'<strong>Model:</strong> {model_label} \u00b7 '
-                    f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
-                    f'({itok:,} input / {otok:,} output tokens)'
-                    f'{cache_str}{batch_str}{model_note}'
-                    f'</div>',
-                    unsafe_allow_html=True
-                )
+                else:
+                    itok = (
+                        token_usage.get("input_tokens", 0)
+                        + token_usage.get("cache_read_tokens", 0)
+                        + token_usage.get("cache_write_tokens", 0)
+                    )
+                    otok = token_usage.get("output_tokens", 0)
+                    cache_str = (
+                        f" \u00b7 Cache saved ~${cache_savings:.4f}"
+                        if cache_savings > 0 else ""
+                    )
+                    batch_str = (
+                        " \u00b7 Batch API 50% pricing applied"
+                        if any(
+                            record.get("batch_priced")
+                            for record in usage_records
+                        ) else ""
+                    )
+                    st.markdown(
+                        f'<div style="background:#EDE7D8;border:1px solid '
+                        f'#DDD5C2;border-radius:8px;padding:12px;'
+                        f'margin-bottom:16px;font-size:13px;color:#3B4A40;">'
+                        f'<strong>Model:</strong> {model_label} \u00b7 '
+                        f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
+                        f'({itok:,} input / {otok:,} output tokens)'
+                        f'{cache_str}{batch_str}'
+                        f'</div>',
+                        unsafe_allow_html=True
+                    )
 
             # Highest-value review queue: uncertain verdicts are surfaced
             # before the full framework-by-framework result set.
@@ -2337,23 +2399,23 @@ def main():
             "progress or comparing two firms' disclosures."
         )
 
-        # Use Streamlit Secrets if configured, otherwise show input
-        secrets_key = st.secrets.get("ANTHROPIC_API_KEY", "")
-        if secrets_key:
-            cmp_api_key = secrets_key
-            st.markdown(
-                '<div style="background:#E8F2EA;border:1px solid #C6E0CC;'
-                'border-radius:8px;padding:10px;font-size:13px;color:#1C6B4A;">'
-                '✓ API key configured</div>',
-                unsafe_allow_html=True
-            )
-        else:
-            cmp_api_key = st.text_input(
-                "Anthropic API Key", type="password",
-                placeholder="sk-ant-...",
-                help="Required for analysis. Your key is not stored.",
-                key="cmp_api_key"
-            )
+        cmp_model_id = st.selectbox(
+            "Comparison model",
+            options=USER_SELECTABLE_MODELS,
+            index=0,
+            format_func=model_picker_label,
+            key="cmp_model_id",
+            help="The same model is used for both reports.",
+        )
+        render_model_price_caption(cmp_model_id)
+        cmp_provider = get_model_config(cmp_model_id)["provider"]
+        cmp_api_key = render_model_api_key(
+            cmp_model_id, f"cmp_{cmp_provider}_api_key"
+        )
+        st.caption(
+            "Comparisons use standard API requests so two independent pending "
+            "batches cannot be stranded. Estimated costs are shown afterwards."
+        )
 
         available_frameworks = (
             list(framework_requirements.keys())
@@ -2475,7 +2537,8 @@ def main():
             type="primary", key="cmp_run"
         ):
             if not cmp_api_key:
-                st.error("Please enter your Anthropic API key")
+                provider = get_model_config(cmp_model_id)["provider"].title()
+                st.error(f"Please enter your {provider} API key")
             elif not cmp_file_a or not cmp_file_b:
                 st.error("Please upload both PDFs")
             elif len(cmp_selected) == 0:
@@ -2506,13 +2569,18 @@ def main():
                 progress_a = st.progress(0)
                 try:
                     results_a, summaries_a, usage_a = (
-                        claude_analyze_report(
+                        run_model_analysis(
                             report_a, cmp_selected, cmp_api_key,
                             framework_requirements, progress_a,
                             requirement_refs,
                             report_pages=pages_a,
+                            use_batch=False,
+                            model_id=cmp_model_id,
                         )
                     )
+                except AnalysisAuthenticationError as e:
+                    st.error(str(e))
+                    results_a, summaries_a = [], {}
                 except Exception as e:
                     st.error(f"Failed on {cmp_name_a}: {e}")
                     results_a, summaries_a = [], {}
@@ -2521,13 +2589,18 @@ def main():
                 progress_b = st.progress(0)
                 try:
                     results_b, summaries_b, usage_b = (
-                        claude_analyze_report(
+                        run_model_analysis(
                             report_b, cmp_selected, cmp_api_key,
                             framework_requirements, progress_b,
                             requirement_refs,
                             report_pages=pages_b,
+                            use_batch=False,
+                            model_id=cmp_model_id,
                         )
                     )
+                except AnalysisAuthenticationError as e:
+                    st.error(str(e))
+                    results_b, summaries_b = [], {}
                 except Exception as e:
                     st.error(f"Failed on {cmp_name_b}: {e}")
                     results_b, summaries_b = [], {}
@@ -2540,6 +2613,9 @@ def main():
                     st.session_state.cmp_stored_name_a = cmp_name_a
                     st.session_state.cmp_stored_name_b = cmp_name_b
                     st.session_state.cmp_frameworks = cmp_selected
+                    st.session_state.cmp_usage_a = usage_a
+                    st.session_state.cmp_usage_b = usage_b
+                    st.session_state.cmp_model_id_used = cmp_model_id
                     st.success("Comparison complete!")
 
         # --- Display comparison results ---
@@ -2554,9 +2630,28 @@ def main():
             name_a = st.session_state.cmp_stored_name_a
             name_b = st.session_state.cmp_stored_name_b
             common_frameworks = st.session_state.cmp_frameworks
+            usage_a = st.session_state.get("cmp_usage_a", {})
+            usage_b = st.session_state.get("cmp_usage_b", {})
+            model_id_used = st.session_state.get(
+                "cmp_model_id_used", PRIMARY_MODEL
+            )
 
             st.markdown("---")
             st.subheader("Comparison Results")
+
+            if usage_a and usage_b:
+                cost_a, _ = estimate_usage_cost(
+                    usage_a.get("usage_records", [])
+                )
+                cost_b, _ = estimate_usage_cost(
+                    usage_b.get("usage_records", [])
+                )
+                model_label = get_model_config(model_id_used)["label"]
+                st.info(
+                    f"{model_label} estimated cost — {name_a}: "
+                    f"${cost_a:.4f}; {name_b}: ${cost_b:.4f}; combined: "
+                    f"${cost_a + cost_b:.4f}. Standard API pricing applied."
+                )
 
             st.markdown(
                 '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
