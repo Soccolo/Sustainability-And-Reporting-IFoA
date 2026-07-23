@@ -16,10 +16,29 @@ from typing import Any, Callable, Iterable
 
 import anthropic
 
-try:
-    import openai
-except ModuleNotFoundError:  # Tests can inject a client without the SDK installed.
-    openai = None
+
+def _load_optional_openai() -> tuple[Any | None, ImportError | None]:
+    """Load the optional OpenAI SDK without breaking Anthropic-only startup."""
+    try:
+        import openai as openai_module
+    except ImportError as error:
+        # ImportError also covers binary/dependency incompatibilities raised
+        # from inside the SDK, not only a completely missing package.
+        return None, error
+    return openai_module, None
+
+
+openai, _OPENAI_IMPORT_ERROR = _load_optional_openai()
+
+
+def _openai_unavailable_message(purpose: str) -> str:
+    """Return a safe operator-facing message for a missing/broken OpenAI SDK."""
+    if _OPENAI_IMPORT_ERROR is not None:
+        return (
+            f"The OpenAI SDK could not be loaded for {purpose}. Rebuild the "
+            "application dependencies from requirements.txt."
+        )
+    return f"The openai package is required for {purpose}"
 
 
 CLASSIFICATION_COVERS = "Covers the framework"
@@ -1133,9 +1152,7 @@ def _analyze_report_with_openai(
         raise ValueError(f"{model_id} is not an OpenAI model")
     if client is None:
         if openai is None:
-            raise RuntimeError(
-                "The openai package is required for GPT-5.6 analysis"
-            )
+            raise RuntimeError(_openai_unavailable_message("GPT-5.6 analysis"))
         client = openai.OpenAI(api_key=api_key)
 
     pages = report_pages or []
@@ -1810,7 +1827,7 @@ def analyze_report_with_review_cascade(
     if resolved_openai is None:
         if openai is None:
             raise RuntimeError(
-                "The openai package is required for the review cascade"
+                _openai_unavailable_message("the review cascade")
             )
         resolved_openai = openai.OpenAI(api_key=openai_api_key)
 
