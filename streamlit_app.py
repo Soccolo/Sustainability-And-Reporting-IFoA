@@ -620,7 +620,7 @@ def render_model_price_caption(model_id):
         f"{model['description']}. USD per 1M tokens — standard: "
         f"${model['input_price']:g} input / ${model['output_price']:g} "
         f"output; cache read / write: ${model['cached_input_price']:g} / "
-        f"${model['cache_write_price']:g}; Batch API: "
+        f"${model['cache_write_price']:g}; Batch API (cheaper, slower): "
         f"${model['batch_input_price']:g} input / "
         f"${model['batch_output_price']:g} output. Vision and reasoning "
         f"change token usage.{long_context_note}"
@@ -1773,20 +1773,31 @@ def main():
 
         with upload_col:
             st.markdown("**Upload Document**")
+            st.info(
+                "**Processing time:** Batch API is the cheaper but slower "
+                "option and may take minutes or substantially longer. Turn it "
+                "off for the fastest interactive result. Vision also adds "
+                "processing time because page images must be rendered, "
+                "uploaded, and analysed."
+            )
             use_vision = st.checkbox(
-                "Use vision for charts and image-based tables",
+                "Use vision for charts and image-based tables — slower",
                 value=True,
                 help=(
                     "Renders up to 30 visually dense or scanned pages and sends "
-                    "them to the selected model alongside page-tagged text."
+                    "them to the selected model alongside page-tagged text. "
+                    "This improves coverage of visual disclosures but increases "
+                    "upload and analysis time."
                 ),
             )
             use_batch_api = st.checkbox(
-                "Use Batch API (50% token discount)",
+                "Use Batch API — 50% cheaper, but slower",
                 value=True,
                 help=(
                     "Uses Anthropic Message Batches or OpenAI Batch, depending "
-                    "on the selected model. Processing can take up to 24 hours."
+                    "on the selected model. Batch is designed for lower cost, "
+                    "not immediate results: it may take minutes and can take up "
+                    "to 24 hours. Turn it off for faster interactive testing."
                 ),
             )
             uploaded_file = st.file_uploader(
