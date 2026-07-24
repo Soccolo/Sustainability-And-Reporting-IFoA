@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 try:
     import anthropic  # noqa: F401
-except ModuleNotFoundError:
+except ImportError:
     fake_anthropic = types.ModuleType("anthropic")
     fake_anthropic.RateLimitError = type("RateLimitError", (Exception,), {})
     fake_anthropic.APIStatusError = type("APIStatusError", (Exception,), {})
