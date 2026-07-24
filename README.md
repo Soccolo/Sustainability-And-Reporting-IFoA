@@ -13,15 +13,13 @@ optional reviewed cascade:
 2. **Reviewer:** GPT-5.6 Luna, Claude Haiku 4.5, GPT-5.6 Terra, or Claude
    Sonnet 5 reviews every analyst verdict, including its evidence, confidence,
    and audit rationale.
-3. **Senior reviewer:** GPT-5.6 Terra, Claude Sonnet 5, Claude Opus 4.8, or
+3. **Senior reviewer:** GPT-5.6 Terra, Claude Sonnet 5, Claude Opus 5, or
    GPT-5.6 Sol reviews only requirements where analyst and reviewer assign
    different classifications.
 
 The analyst and reviewer must differ, as must the reviewer and senior reviewer.
-These rules are enforced in both the UI and analysis engine. Anthropic does not
-currently offer an API model named "Opus 5", so the picker identifies Opus 4.8
-as the latest available Opus model. Single-model runs never silently switch to
-a differently priced fallback.
+These rules are enforced in both the UI and analysis engine. Single-model runs
+never silently switch to a differently priced fallback.
 
 List prices below are USD per million tokens as of 24 July 2026:
 
@@ -31,7 +29,7 @@ List prices below are USD per million tokens as of 24 July 2026:
 | GPT-5.6 Luna | $1 / $6 | $0.10 / $1.25 | $0.50 / $3 |
 | GPT-5.6 Terra | $2.50 / $15 | $0.25 / $3.125 | $1.25 / $7.50 |
 | Claude Sonnet 5* | $2 / $10 | $0.20 / $2.50 | $1 / $5 |
-| Claude Opus 4.8 | $5 / $25 | $0.50 / $6.25 | $2.50 / $12.50 |
+| Claude Opus 5 | $5 / $25 | $0.50 / $6.25 | $2.50 / $12.50 |
 | GPT-5.6 Sol | $5 / $30 | $0.50 / $6.25 | $2.50 / $15 |
 
 \* Sonnet 5 introductory pricing applies through 31 August 2026; the app's

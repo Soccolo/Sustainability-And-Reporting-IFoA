@@ -54,7 +54,7 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 LUNA_MODEL = "gpt-5.6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
 SONNET_MODEL = "claude-sonnet-5"
-OPUS_MODEL = "claude-opus-4-8"
+OPUS_MODEL = "claude-opus-5"
 SOL_MODEL = "gpt-5.6-sol"
 PRIMARY_MODEL = HAIKU_MODEL
 
@@ -122,7 +122,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "adaptive_thinking": True,
     },
     OPUS_MODEL: {
-        "label": "Claude Opus 4.8 (latest Opus)",
+        "label": "Claude Opus 5",
         "provider": "anthropic",
         "input_price": 5.0,
         "cached_input_price": 0.5,
@@ -130,9 +130,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "output_price": 25.0,
         "batch_input_price": 2.5,
         "batch_output_price": 12.5,
-        "description": (
-            "Latest available Opus model for demanding senior review"
-        ),
+        "description": "Frontier Opus model for demanding senior review",
         "secret_name": "ANTHROPIC_API_KEY",
         "adaptive_thinking": True,
     },

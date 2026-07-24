@@ -274,6 +274,7 @@ class AnalysisCoreTests(unittest.TestCase):
 
     def test_model_catalog_and_picker_prices_are_consistent(self):
         self.assertEqual(analysis_core.PRIMARY_MODEL, analysis_core.HAIKU_MODEL)
+        self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5")
         self.assertEqual(
             analysis_core.USER_SELECTABLE_MODELS,
             (

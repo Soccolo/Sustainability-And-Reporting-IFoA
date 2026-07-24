@@ -2226,10 +2226,6 @@ def main():
                         "differ. The reviewer model is excluded."
                     ),
                 )
-                st.caption(
-                    "Anthropic currently exposes no `Opus 5` API model; "
-                    "Opus 4.8 is the latest available Opus option."
-                )
                 selected_model_id = analyst_model_id
                 selected_cascade_models = (
                     analyst_model_id,
