@@ -286,6 +286,15 @@ class AnalysisCoreTests(unittest.TestCase):
             analysis_core.HAIKU_MODEL: ("anthropic", 1.0, 5.0, 0.5, 2.5),
             analysis_core.LUNA_MODEL: ("openai", 1.0, 6.0, 0.5, 3.0),
             analysis_core.TERRA_MODEL: ("openai", 2.5, 15.0, 1.25, 7.5),
+            analysis_core.SONNET_MODEL: (
+                "anthropic", 2.0, 10.0, 1.0, 5.0
+            ),
+            analysis_core.OPUS_MODEL: (
+                "anthropic", 5.0, 25.0, 2.5, 12.5
+            ),
+            analysis_core.SOL_MODEL: (
+                "openai", 5.0, 30.0, 2.5, 15.0
+            ),
         }
         for model_id, values in expected.items():
             config = analysis_core.get_model_config(model_id)
@@ -352,6 +361,210 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertAlmostEqual(below, 0.272)
         self.assertAlmostEqual(above, 0.544002)
         self.assertAlmostEqual(batch, above / 2)
+
+    def test_review_cascade_role_rules_reject_invalid_or_reused_models(self):
+        analysis_core.validate_review_cascade_roles(
+            analysis_core.HAIKU_MODEL,
+            analysis_core.LUNA_MODEL,
+            analysis_core.TERRA_MODEL,
+        )
+        with self.assertRaisesRegex(
+            ValueError, "analyst and reviewer must be different"
+        ):
+            analysis_core.validate_review_cascade_roles(
+                analysis_core.HAIKU_MODEL,
+                analysis_core.HAIKU_MODEL,
+                analysis_core.TERRA_MODEL,
+            )
+        with self.assertRaisesRegex(
+            ValueError, "reviewer and senior reviewer must be different"
+        ):
+            analysis_core.validate_review_cascade_roles(
+                analysis_core.HAIKU_MODEL,
+                analysis_core.TERRA_MODEL,
+                analysis_core.TERRA_MODEL,
+            )
+        with self.assertRaisesRegex(ValueError, "cannot be used as analyst"):
+            analysis_core.validate_review_cascade_roles(
+                analysis_core.TERRA_MODEL,
+                analysis_core.LUNA_MODEL,
+                analysis_core.SOL_MODEL,
+            )
+
+    def test_configurable_anthropic_only_cascade_routes_all_three_roles(self):
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "medium",
+                            "Analyst rationale.",
+                        )
+                    ]
+                ),
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_PARTLY,
+                            "medium",
+                            "Reviewer rationale.",
+                        )
+                    ]
+                ),
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_PARTLY,
+                            "high",
+                            "Senior reviewer rationale.",
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        results, _, usage = analysis_core.analyze_report_with_review_cascade(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            anthropic_api_key="anthropic-key",
+            openai_api_key="",
+            framework_requirements={
+                "FW A": {"governance": ["Canonical requirement"]}
+            },
+            framework_full_names={"FW A": "Framework A"},
+            anthropic_client=anthropic_client,
+            analyst_model_id=analysis_core.HAIKU_MODEL,
+            reviewer_model_id=analysis_core.SONNET_MODEL,
+            senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+        )
+
+        self.assertEqual(
+            [call["model"] for call in anthropic_client.calls],
+            [
+                analysis_core.HAIKU_MODEL,
+                analysis_core.SONNET_MODEL,
+                analysis_core.OPUS_MODEL,
+            ],
+        )
+        self.assertNotIn("thinking", anthropic_client.calls[0])
+        self.assertEqual(
+            anthropic_client.calls[1]["thinking"], {"type": "adaptive"}
+        )
+        self.assertEqual(
+            anthropic_client.calls[2]["thinking"], {"type": "adaptive"}
+        )
+        self.assertIn(
+            '"analyst"',
+            anthropic_client.calls[1]["messages"][0]["content"][-1]["text"],
+        )
+        self.assertIn(
+            '"reviewer"',
+            anthropic_client.calls[2]["messages"][0]["content"][-1]["text"],
+        )
+        result = results[0]
+        self.assertEqual(
+            result["cascade_status"], "senior_reviewer_adjudicated"
+        )
+        self.assertEqual(
+            result["role_models"],
+            {
+                "analyst": analysis_core.HAIKU_MODEL,
+                "reviewer": analysis_core.SONNET_MODEL,
+                "senior_reviewer": analysis_core.OPUS_MODEL,
+            },
+        )
+        self.assertEqual(
+            usage["models_used"],
+            {
+                analysis_core.HAIKU_MODEL,
+                analysis_core.SONNET_MODEL,
+                analysis_core.OPUS_MODEL,
+            },
+        )
+
+    def test_configurable_openai_only_cascade_needs_no_anthropic_key(self):
+        openai_client = SequencedOpenAIClient(
+            [
+                openai_response_body(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "medium",
+                            "Luna analyst rationale.",
+                        )
+                    ]
+                ),
+                openai_response_body(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_PARTLY,
+                            "medium",
+                            "Terra reviewer rationale.",
+                        )
+                    ]
+                ),
+                openai_response_body(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_PARTLY,
+                            "high",
+                            "Sol senior rationale.",
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        results, _, usage = analysis_core.analyze_report_with_review_cascade(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            anthropic_api_key="",
+            openai_api_key="openai-key",
+            framework_requirements={
+                "FW A": {"governance": ["Canonical requirement"]}
+            },
+            framework_full_names={"FW A": "Framework A"},
+            openai_client=openai_client,
+            analyst_model_id=analysis_core.LUNA_MODEL,
+            reviewer_model_id=analysis_core.TERRA_MODEL,
+            senior_reviewer_model_id=analysis_core.SOL_MODEL,
+        )
+
+        self.assertEqual(
+            [call["model"] for call in openai_client.calls],
+            [
+                analysis_core.LUNA_MODEL,
+                analysis_core.TERRA_MODEL,
+                analysis_core.SOL_MODEL,
+            ],
+        )
+        self.assertEqual(
+            [call["reasoning"]["effort"] for call in openai_client.calls],
+            ["medium", "medium", "high"],
+        )
+        self.assertEqual(
+            results[0]["role_models"],
+            {
+                "analyst": analysis_core.LUNA_MODEL,
+                "reviewer": analysis_core.TERRA_MODEL,
+                "senior_reviewer": analysis_core.SOL_MODEL,
+            },
+        )
+        self.assertEqual(
+            usage["models_used"],
+            {
+                analysis_core.LUNA_MODEL,
+                analysis_core.TERRA_MODEL,
+                analysis_core.SOL_MODEL,
+            },
+        )
 
     def test_requirement_set_must_be_exact_and_uses_canonical_text(self):
         expected = {
@@ -898,7 +1111,9 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertIn(
             "first assess the report evidence independently", luna_prompt
         )
-        self.assertIn("audit the supplied Haiku record", luna_prompt)
+        self.assertIn(
+            "audit the supplied Claude Haiku 4.5 record", luna_prompt
+        )
         self.assertIn(
             "Haiku rationale carried into the audit.", luna_prompt
         )
@@ -910,23 +1125,33 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(result["rationale"], "Luna final rationale.")
         self.assertEqual(result["confidence"], "medium")
         self.assertEqual(result["analysis_mode"], "review_cascade")
-        self.assertEqual(result["cascade_status"], "haiku_luna_agree")
+        self.assertEqual(
+            result["cascade_status"], "analyst_reviewer_agree"
+        )
         self.assertFalse(result["needs_human_review"])
         self.assertEqual(
             result["models_consulted"],
             [analysis_core.HAIKU_MODEL, analysis_core.LUNA_MODEL],
         )
         self.assertEqual(
-            set(result["model_verdicts"]), {"haiku", "luna"}
+            set(result["model_verdicts"]), {"analyst", "reviewer"}
+        )
+        self.assertEqual(
+            result["role_models"],
+            {
+                "analyst": analysis_core.HAIKU_MODEL,
+                "reviewer": analysis_core.LUNA_MODEL,
+                "senior_reviewer": analysis_core.TERRA_MODEL,
+            },
         )
         self.assertEqual(
             summaries["FW A"]["cascade_status_counts"],
             {
-                "haiku_luna_agree": 1,
-                "terra_adjudicated": 0,
+                "analyst_reviewer_agree": 1,
+                "senior_reviewer_adjudicated": 0,
                 "three_way_disagreement": 0,
-                "luna_review_failed": 0,
-                "terra_review_failed": 0,
+                "reviewer_failed": 0,
+                "senior_reviewer_failed": 0,
             },
         )
         self.assertEqual(summaries["FW A"]["needs_human_review"], 0)
@@ -934,7 +1159,7 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(usage["output_tokens"], 30)
         self.assertEqual(
             [record["cascade_stage"] for record in usage["usage_records"]],
-            ["haiku_initial", "luna_review"],
+            ["analyst", "reviewer"],
         )
         self.assertEqual(
             usage["models_used"],
@@ -944,7 +1169,7 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertFalse(usage["batch_api"])
         self.assertEqual(
             set(usage["usage_by_stage"]),
-            {"haiku_initial", "luna_review"},
+            {"analyst", "reviewer"},
         )
         estimated_cost, _ = analysis_core.estimate_usage_cost(
             usage["usage_records"]
@@ -1051,28 +1276,29 @@ class AnalysisCoreTests(unittest.TestCase):
             by_id["R0001"]["rationale"], "Luna rationale for R1."
         )
         self.assertEqual(
-            by_id["R0001"]["cascade_status"], "haiku_luna_agree"
+            by_id["R0001"]["cascade_status"], "analyst_reviewer_agree"
         )
         self.assertEqual(
             by_id["R0002"]["rationale"], "Terra adjudication for R2."
         )
         self.assertEqual(by_id["R0002"]["confidence"], "medium")
         self.assertEqual(
-            by_id["R0002"]["cascade_status"], "terra_adjudicated"
+            by_id["R0002"]["cascade_status"],
+            "senior_reviewer_adjudicated",
         )
         self.assertFalse(by_id["R0002"]["needs_human_review"])
         self.assertEqual(
             set(by_id["R0002"]["model_verdicts"]),
-            {"haiku", "luna", "terra"},
+            {"analyst", "reviewer", "senior_reviewer"},
         )
         self.assertEqual(
             summaries["FW A"]["cascade_status_counts"],
             {
-                "haiku_luna_agree": 1,
-                "terra_adjudicated": 1,
+                "analyst_reviewer_agree": 1,
+                "senior_reviewer_adjudicated": 1,
                 "three_way_disagreement": 0,
-                "luna_review_failed": 0,
-                "terra_review_failed": 0,
+                "reviewer_failed": 0,
+                "senior_reviewer_failed": 0,
             },
         )
         self.assertEqual(usage["input_tokens"], 580)
@@ -1080,9 +1306,9 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(
             [record["cascade_stage"] for record in usage["usage_records"]],
             [
-                "haiku_initial",
-                "luna_review",
-                "terra_adjudication",
+                "analyst",
+                "reviewer",
+                "senior_reviewer",
             ],
         )
         self.assertEqual(
@@ -1261,7 +1487,9 @@ class AnalysisCoreTests(unittest.TestCase):
             openai_client.model_checks,
             [analysis_core.LUNA_MODEL, analysis_core.TERRA_MODEL],
         )
-        self.assertEqual(results[0]["cascade_status"], "haiku_luna_agree")
+        self.assertEqual(
+            results[0]["cascade_status"], "analyst_reviewer_agree"
+        )
 
     def test_review_cascade_allows_restricted_or_transient_models_preflight(self):
         haiku_client = SequencedAnthropicClient(
@@ -1311,7 +1539,9 @@ class AnalysisCoreTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(results[0]["cascade_status"], "haiku_luna_agree")
+        self.assertEqual(
+            results[0]["cascade_status"], "analyst_reviewer_agree"
+        )
         self.assertTrue(
             any(
                 level == "warning" and "restricted keys" in message
@@ -1504,23 +1734,25 @@ class AnalysisCoreTests(unittest.TestCase):
 
         by_framework = {result["framework"]: result for result in results}
         self.assertEqual(
-            by_framework["FW A"]["cascade_status"], "haiku_luna_agree"
+            by_framework["FW A"]["cascade_status"],
+            "analyst_reviewer_agree",
         )
         self.assertEqual(
-            by_framework["FW B"]["cascade_status"], "luna_review_failed"
+            by_framework["FW B"]["cascade_status"], "reviewer_failed"
         )
         self.assertEqual(
-            set(by_framework["FW A"]["model_verdicts"]), {"haiku", "luna"}
+            set(by_framework["FW A"]["model_verdicts"]),
+            {"analyst", "reviewer"},
         )
         self.assertEqual(
-            set(by_framework["FW B"]["model_verdicts"]), {"haiku"}
+            set(by_framework["FW B"]["model_verdicts"]), {"analyst"}
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 1)
         self.assertEqual(summaries["FW A"]["provisional"], 0)
         self.assertEqual(summaries["FW B"]["scored_total"], 0)
         self.assertEqual(summaries["FW B"]["provisional"], 1)
         self.assertFalse(usage["cascade_complete"])
-        self.assertEqual(usage["cascade_failure_stages"], ["luna_review"])
+        self.assertEqual(usage["cascade_failure_stages"], ["reviewer"])
 
     def test_review_cascade_keeps_successful_terra_framework_on_later_failure(self):
         haiku_client = SequencedAnthropicClient(
@@ -1604,24 +1836,27 @@ class AnalysisCoreTests(unittest.TestCase):
 
         by_framework = {result["framework"]: result for result in results}
         self.assertEqual(
-            by_framework["FW A"]["cascade_status"], "terra_adjudicated"
+            by_framework["FW A"]["cascade_status"],
+            "senior_reviewer_adjudicated",
         )
         self.assertEqual(
-            by_framework["FW B"]["cascade_status"], "terra_review_failed"
+            by_framework["FW B"]["cascade_status"],
+            "senior_reviewer_failed",
         )
         self.assertEqual(
             set(by_framework["FW A"]["model_verdicts"]),
-            {"haiku", "luna", "terra"},
+            {"analyst", "reviewer", "senior_reviewer"},
         )
         self.assertEqual(
-            set(by_framework["FW B"]["model_verdicts"]), {"haiku", "luna"}
+            set(by_framework["FW B"]["model_verdicts"]),
+            {"analyst", "reviewer"},
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 1)
         self.assertEqual(summaries["FW B"]["scored_total"], 0)
         self.assertEqual(summaries["FW B"]["provisional"], 1)
         self.assertFalse(usage["cascade_complete"])
         self.assertEqual(
-            usage["cascade_failure_stages"], ["terra_adjudication"]
+            usage["cascade_failure_stages"], ["senior_reviewer"]
         )
 
     def test_review_cascade_retains_partial_results_and_billed_terra_usage(self):
@@ -1676,17 +1911,21 @@ class AnalysisCoreTests(unittest.TestCase):
         )
 
         result = results[0]
-        self.assertEqual(result["cascade_status"], "terra_review_failed")
+        self.assertEqual(
+            result["cascade_status"], "senior_reviewer_failed"
+        )
         self.assertEqual(
             result["classification"],
             analysis_core.CLASSIFICATION_PARTLY,
         )
         self.assertEqual(result["confidence"], "low")
         self.assertTrue(result["needs_human_review"])
-        self.assertEqual(set(result["model_verdicts"]), {"haiku", "luna"})
+        self.assertEqual(
+            set(result["model_verdicts"]), {"analyst", "reviewer"}
+        )
         self.assertFalse(usage["cascade_complete"])
         self.assertEqual(
-            usage["cascade_failure_stage"], "terra_adjudication"
+            usage["cascade_failure_stage"], "senior_reviewer"
         )
         self.assertEqual(
             [
@@ -1694,10 +1933,10 @@ class AnalysisCoreTests(unittest.TestCase):
                 for record in usage["usage_records"]
             ],
             [
-                "haiku_initial",
-                "luna_review",
-                "terra_adjudication",
-                "terra_adjudication",
+                "analyst",
+                "reviewer",
+                "senior_reviewer",
+                "senior_reviewer",
             ],
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 0)
@@ -1741,18 +1980,18 @@ class AnalysisCoreTests(unittest.TestCase):
         )
 
         result = results[0]
-        self.assertEqual(result["cascade_status"], "luna_review_failed")
+        self.assertEqual(result["cascade_status"], "reviewer_failed")
         self.assertEqual(result["confidence"], "low")
         self.assertTrue(result["needs_human_review"])
-        self.assertEqual(set(result["model_verdicts"]), {"haiku"})
+        self.assertEqual(set(result["model_verdicts"]), {"analyst"})
         self.assertFalse(usage["cascade_complete"])
-        self.assertEqual(usage["cascade_failure_stage"], "luna_review")
+        self.assertEqual(usage["cascade_failure_stage"], "reviewer")
         self.assertEqual(
             [
                 record["cascade_stage"]
                 for record in usage["usage_records"]
             ],
-            ["haiku_initial", "luna_review", "luna_review"],
+            ["analyst", "reviewer", "reviewer"],
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 0)
         self.assertEqual(summaries["FW A"]["provisional"], 1)
@@ -1761,7 +2000,7 @@ class AnalysisCoreTests(unittest.TestCase):
         haiku_client = SequencedAnthropicClient([])
         openai_client = SequencedOpenAIClient([])
 
-        with self.assertRaisesRegex(ValueError, "Both Anthropic and OpenAI"):
+        with self.assertRaisesRegex(ValueError, "OpenAI API key is required"):
             analysis_core.analyze_report_with_review_cascade(
                 report_text="[Page 1] Evidence",
                 selected_frameworks=["FW A"],

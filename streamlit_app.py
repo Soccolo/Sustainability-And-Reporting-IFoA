@@ -28,11 +28,14 @@ from collections import defaultdict
 
 import report_drafter
 from analysis_core import (
+    ANALYST_MODELS,
     AnalysisAuthenticationError,
     HAIKU_MODEL,
     LUNA_MODEL,
     MODEL_CATALOG,
     PRIMARY_MODEL,
+    REVIEWER_MODELS,
+    SENIOR_REVIEWER_MODELS,
     TERRA_MODEL,
     USER_SELECTABLE_MODELS,
     analyze_report,
@@ -589,8 +592,11 @@ def run_review_cascade(
     progress_bar=None,
     requirement_refs=None,
     report_pages=None,
+    analyst_model_id=HAIKU_MODEL,
+    reviewer_model_id=LUNA_MODEL,
+    senior_reviewer_model_id=TERRA_MODEL,
 ):
-    """Run Haiku, Luna, then conditional Terra review using standard calls."""
+    """Run the selected three-role review cascade using standard calls."""
 
     def update_progress(value):
         if progress_bar:
@@ -610,6 +616,9 @@ def run_review_cascade(
         report_pages=report_pages,
         progress_callback=update_progress,
         status_callback=show_status,
+        analyst_model_id=analyst_model_id,
+        reviewer_model_id=reviewer_model_id,
+        senior_reviewer_model_id=senior_reviewer_model_id,
     )
 
 
@@ -669,6 +678,11 @@ ANALYSIS_STRATEGY_SINGLE = "Single model"
 ANALYSIS_STRATEGY_CASCADE = "Reviewed cascade"
 
 CASCADE_STATUS_LABELS = {
+    "analyst_reviewer_agree": "Analyst + reviewer agree",
+    "senior_reviewer_adjudicated": "Senior reviewer adjudicated",
+    "reviewer_failed": "Reviewer incomplete",
+    "senior_reviewer_failed": "Senior reviewer incomplete",
+    # Retain labels for results created before configurable cascade roles.
     "haiku_luna_agree": "Haiku + Luna agree",
     "terra_adjudicated": "Terra adjudicated",
     "three_way_disagreement": "Three-way disagreement",
@@ -677,18 +691,48 @@ CASCADE_STATUS_LABELS = {
 }
 CASCADE_PROVISIONAL_STATUSES = {
     "three_way_disagreement",
+    "reviewer_failed",
+    "senior_reviewer_failed",
     "luna_review_failed",
     "terra_review_failed",
 }
+LEGACY_CASCADE_ROLE_KEYS = {
+    "analyst": "haiku",
+    "reviewer": "luna",
+    "senior_reviewer": "terra",
+}
 
 
-def get_cascade_vote(result, model_name):
-    """Return one model's saved cascade verdict, or an empty mapping."""
+def get_cascade_vote(result, role):
+    """Return one role's saved cascade verdict, including legacy runs."""
     votes = result.get("model_verdicts", {})
     if not isinstance(votes, dict):
         return {}
-    vote = votes.get(model_name, {})
+    vote = votes.get(role)
+    if vote is None:
+        vote = votes.get(LEGACY_CASCADE_ROLE_KEYS.get(role, ""), {})
     return vote if isinstance(vote, dict) else {}
+
+
+def cascade_role_model(result, role):
+    """Return the model ID assigned to a cascade role."""
+    role_models = result.get("role_models", {})
+    if isinstance(role_models, dict) and role_models.get(role):
+        return role_models[role]
+    legacy_models = {
+        "analyst": HAIKU_MODEL,
+        "reviewer": LUNA_MODEL,
+        "senior_reviewer": TERRA_MODEL,
+    }
+    return legacy_models[role]
+
+
+def cascade_role_label(result, role):
+    model_id = cascade_role_model(result, role)
+    try:
+        return get_model_config(model_id)["label"]
+    except ValueError:
+        return str(model_id)
 
 
 def is_review_cascade_result(result):
@@ -712,6 +756,17 @@ def result_needs_human_review(result):
 
 def cascade_status_label(result):
     status = result.get("cascade_status", "")
+    analyst = cascade_role_label(result, "analyst")
+    reviewer = cascade_role_label(result, "reviewer")
+    senior = cascade_role_label(result, "senior_reviewer")
+    dynamic_labels = {
+        "analyst_reviewer_agree": f"{analyst} + {reviewer} agree",
+        "senior_reviewer_adjudicated": f"{senior} adjudicated",
+        "reviewer_failed": f"{reviewer} review incomplete",
+        "senior_reviewer_failed": f"{senior} review incomplete",
+    }
+    if status in dynamic_labels:
+        return dynamic_labels[status]
     return CASCADE_STATUS_LABELS.get(status, str(status).replace("_", " ").title())
 
 
@@ -723,6 +778,10 @@ def build_cascade_review_html(result):
     status = result.get("cascade_status", "")
     status_label = html.escape(cascade_status_label(result))
     status_colors = {
+        "analyst_reviewer_agree": ("#E8F2EA", "#1C6B4A"),
+        "senior_reviewer_adjudicated": ("#FBF0D8", "#977322"),
+        "reviewer_failed": ("#F8E3DD", "#B4472F"),
+        "senior_reviewer_failed": ("#F8E3DD", "#B4472F"),
         "haiku_luna_agree": ("#E8F2EA", "#1C6B4A"),
         "terra_adjudicated": ("#FBF0D8", "#977322"),
         "three_way_disagreement": ("#F8E3DD", "#B4472F"),
@@ -739,28 +798,42 @@ def build_cascade_review_html(result):
     )
 
     vote_rows = []
-    for model_name, display_name in (
-        ("haiku", "Haiku"),
-        ("luna", "Luna"),
-        ("terra", "Terra"),
+    for role, role_title in (
+        ("analyst", "Analyst"),
+        ("reviewer", "Reviewer"),
+        ("senior_reviewer", "Senior reviewer"),
     ):
-        vote = get_cascade_vote(result, model_name)
+        display_name = (
+            f"{role_title} — {cascade_role_label(result, role)}"
+        )
+        vote = get_cascade_vote(result, role)
         if not vote:
-            if model_name == "terra" and status == "haiku_luna_agree":
+            if role == "senior_reviewer" and status in {
+                "analyst_reviewer_agree",
+                "haiku_luna_agree",
+            }:
                 vote_rows.append(
                     '<div style="font-size:11px;color:#6E796F;">'
-                    "<strong>Terra:</strong> Not needed — Haiku and Luna "
-                    "agreed.</div>"
+                    f"<strong>{html.escape(display_name)}:</strong> Not "
+                    "needed — analyst and reviewer agreed.</div>"
                 )
-            elif model_name == "luna" and status == "luna_review_failed":
+            elif role == "reviewer" and status in {
+                "reviewer_failed",
+                "luna_review_failed",
+            }:
                 vote_rows.append(
                     '<div style="font-size:11px;color:#B4472F;">'
-                    "<strong>Luna:</strong> Review did not complete.</div>"
+                    f"<strong>{html.escape(display_name)}:</strong> Review did "
+                    "not complete.</div>"
                 )
-            elif model_name == "terra" and status == "terra_review_failed":
+            elif role == "senior_reviewer" and status in {
+                "senior_reviewer_failed",
+                "terra_review_failed",
+            }:
                 vote_rows.append(
                     '<div style="font-size:11px;color:#B4472F;">'
-                    "<strong>Terra:</strong> Adjudication did not complete."
+                    f"<strong>{html.escape(display_name)}:</strong> "
+                    "Adjudication did not complete."
                     "</div>"
                 )
             continue
@@ -778,7 +851,7 @@ def build_cascade_review_html(result):
         )
         vote_rows.append(
             '<div style="font-size:11px;color:#3B4A40;margin-top:5px;">'
-            f"<strong>{display_name}:</strong> {verdict}"
+            f"<strong>{html.escape(display_name)}:</strong> {verdict}"
             f"{f' · {confidence} confidence' if confidence else ''}"
             f"{f'<br><strong>Confidence reason:</strong> {confidence_reason}' if confidence_reason else ''}"
             f"{f'<br><strong>Rationale:</strong> {rationale}' if rationale else ''}"
@@ -880,7 +953,7 @@ def generate_results_excel(results, framework_summaries):
     summary_headers = [
         "Framework", "Covers", "Partly Covers", "Doesn't Cover",
         "Total Requirements", "Low-confidence Review",
-        "Haiku + Luna Agreements", "Terra Adjudications",
+        "Analyst + Reviewer Agreements", "Senior Adjudications",
         "Three-way Disagreements", "Incomplete Cascade Reviews",
         "Human Review",
     ]
@@ -908,34 +981,35 @@ def generate_results_excel(results, framework_summaries):
         ws_summary.cell(
             row=row, column=6, value=s.get("low_confidence", 0)
         ).border = thin_border
-        status_counts = s.get("cascade_status_counts", {})
         framework_results = [
             result for result in results if result.get("framework") == fw
         ]
-        agreement_count = status_counts.get(
-            "haiku_luna_agree",
-            sum(
-                result.get("cascade_status") == "haiku_luna_agree"
-                for result in framework_results
-            ),
+        agreement_count = sum(
+            result.get("cascade_status") in {
+                "analyst_reviewer_agree",
+                "haiku_luna_agree",
+            }
+            for result in framework_results
         )
-        terra_count = status_counts.get(
-            "terra_adjudicated",
-            sum(
-                result.get("cascade_status") == "terra_adjudicated"
-                for result in framework_results
-            ),
+        terra_count = sum(
+            result.get("cascade_status") in {
+                "senior_reviewer_adjudicated",
+                "terra_adjudicated",
+            }
+            for result in framework_results
         )
-        three_way_count = status_counts.get(
-            "three_way_disagreement",
-            sum(
-                result.get("cascade_status") == "three_way_disagreement"
-                for result in framework_results
-            ),
+        three_way_count = sum(
+            result.get("cascade_status") == "three_way_disagreement"
+            for result in framework_results
         )
         incomplete_count = sum(
-            status_counts.get(status, 0)
-            for status in ("luna_review_failed", "terra_review_failed")
+            result.get("cascade_status") in {
+                "reviewer_failed",
+                "senior_reviewer_failed",
+                "luna_review_failed",
+                "terra_review_failed",
+            }
+            for result in framework_results
         )
         human_review_count = sum(
             result_needs_human_review(result)
@@ -966,9 +1040,12 @@ def generate_results_excel(results, framework_summaries):
     detail_headers = [
         "Framework", "Topic", "Reference", "Requirement", "Classification",
         "Cascade Status", "Human Review Required",
-        "Haiku Verdict", "Haiku Confidence", "Haiku Review Detail",
-        "Luna Verdict", "Luna Confidence", "Luna Review Detail",
-        "Terra Verdict", "Terra Confidence", "Terra Review Detail",
+        "Analyst Model and Verdict", "Analyst Confidence",
+        "Analyst Review Detail",
+        "Reviewer Model and Verdict", "Reviewer Confidence",
+        "Reviewer Review Detail",
+        "Senior Reviewer Model and Verdict", "Senior Reviewer Confidence",
+        "Senior Reviewer Review Detail",
         "Confidence", "Confidence Reason", "Rationale", "Relevant Extracts",
     ]
     for col, h in enumerate(detail_headers, 1):
@@ -999,9 +1076,9 @@ def generate_results_excel(results, framework_summaries):
                 )
             return "\n".join(detail_lines)
 
-        haiku_vote = get_cascade_vote(result, "haiku")
-        luna_vote = get_cascade_vote(result, "luna")
-        terra_vote = get_cascade_vote(result, "terra")
+        analyst_vote = get_cascade_vote(result, "analyst")
+        reviewer_vote = get_cascade_vote(result, "reviewer")
+        senior_vote = get_cascade_vote(result, "senior_reviewer")
         is_cascade = is_review_cascade_result(result)
         status = result.get("cascade_status", "") if is_cascade else ""
         human_review = result_needs_human_review(result)
@@ -1011,17 +1088,29 @@ def generate_results_excel(results, framework_summaries):
             result.get("reference", ""),
             result["requirement"],
             result["classification"],
-            status,
+            cascade_status_label(result) if is_cascade else "",
             "Yes" if human_review else "No",
-            haiku_vote.get("classification", ""),
-            haiku_vote.get("confidence", ""),
-            vote_review_detail(haiku_vote),
-            luna_vote.get("classification", ""),
-            luna_vote.get("confidence", ""),
-            vote_review_detail(luna_vote),
-            terra_vote.get("classification", ""),
-            terra_vote.get("confidence", ""),
-            vote_review_detail(terra_vote),
+            (
+                f"{cascade_role_label(result, 'analyst')}: "
+                f"{analyst_vote.get('classification', '')}"
+                if analyst_vote else ""
+            ),
+            analyst_vote.get("confidence", ""),
+            vote_review_detail(analyst_vote),
+            (
+                f"{cascade_role_label(result, 'reviewer')}: "
+                f"{reviewer_vote.get('classification', '')}"
+                if reviewer_vote else ""
+            ),
+            reviewer_vote.get("confidence", ""),
+            vote_review_detail(reviewer_vote),
+            (
+                f"{cascade_role_label(result, 'senior_reviewer')}: "
+                f"{senior_vote.get('classification', '')}"
+                if senior_vote else ""
+            ),
+            senior_vote.get("confidence", ""),
+            vote_review_detail(senior_vote),
             result.get("confidence", "low").title(),
             result.get("confidence_reason", ""),
             result.get("rationale", ""),
@@ -1046,9 +1135,12 @@ def generate_results_excel(results, framework_summaries):
             class_cell.fill = red_fill
 
         status_cell = worksheet.cell(row=row_number, column=6)
-        if status == "haiku_luna_agree":
+        if status in {"analyst_reviewer_agree", "haiku_luna_agree"}:
             status_cell.fill = green_fill
-        elif status == "terra_adjudicated":
+        elif status in {
+            "senior_reviewer_adjudicated",
+            "terra_adjudicated",
+        }:
             status_cell.fill = amber_fill
         elif status == "three_way_disagreement":
             status_cell.fill = red_fill
@@ -2064,9 +2156,9 @@ def main():
                 disabled=bool(pending_batch_id),
                 horizontal=True,
                 help=(
-                    "Reviewed cascade runs Haiku first; Luna reviews Haiku's "
-                    "explicit verdict, evidence, and rationale; Terra reviews "
-                    "only disagreements."
+                    "Choose an analyst and reviewer for every requirement, "
+                    "plus a senior reviewer that is called only when their "
+                    "classifications disagree."
                 ),
             )
             is_review_cascade = (
@@ -2075,31 +2167,121 @@ def main():
             anthropic_api_key = ""
             openai_api_key = ""
             api_key = ""
+            required_cascade_providers = set()
 
             if is_review_cascade:
-                selected_model_id = HAIKU_MODEL
+                analyst_model_id = st.selectbox(
+                    "Analyst",
+                    options=ANALYST_MODELS,
+                    index=ANALYST_MODELS.index(HAIKU_MODEL),
+                    format_func=model_picker_label,
+                    key="cascade_analyst_model_id",
+                    help="The analyst performs the initial assessment.",
+                )
+                available_reviewers = tuple(
+                    model_id
+                    for model_id in REVIEWER_MODELS
+                    if model_id != analyst_model_id
+                )
+                if (
+                    st.session_state.get("cascade_reviewer_model_id")
+                    not in available_reviewers
+                ):
+                    st.session_state["cascade_reviewer_model_id"] = (
+                        LUNA_MODEL
+                        if LUNA_MODEL in available_reviewers
+                        else available_reviewers[0]
+                    )
+                reviewer_model_id = st.selectbox(
+                    "Reviewer",
+                    options=available_reviewers,
+                    format_func=model_picker_label,
+                    key="cascade_reviewer_model_id",
+                    help=(
+                        "The reviewer independently checks every analyst "
+                        "assessment. The analyst model is excluded."
+                    ),
+                )
+                available_senior_reviewers = tuple(
+                    model_id
+                    for model_id in SENIOR_REVIEWER_MODELS
+                    if model_id != reviewer_model_id
+                )
+                if (
+                    st.session_state.get("cascade_senior_reviewer_model_id")
+                    not in available_senior_reviewers
+                ):
+                    st.session_state["cascade_senior_reviewer_model_id"] = (
+                        TERRA_MODEL
+                        if TERRA_MODEL in available_senior_reviewers
+                        else available_senior_reviewers[0]
+                    )
+                senior_reviewer_model_id = st.selectbox(
+                    "Senior reviewer (disagreements only)",
+                    options=available_senior_reviewers,
+                    format_func=model_picker_label,
+                    key="cascade_senior_reviewer_model_id",
+                    help=(
+                        "Called only when analyst and reviewer classifications "
+                        "differ. The reviewer model is excluded."
+                    ),
+                )
+                st.caption(
+                    "Anthropic currently exposes no `Opus 5` API model; "
+                    "Opus 4.8 is the latest available Opus option."
+                )
+                selected_model_id = analyst_model_id
+                selected_cascade_models = (
+                    analyst_model_id,
+                    reviewer_model_id,
+                    senior_reviewer_model_id,
+                )
+                required_cascade_providers = {
+                    get_model_config(model_id)["provider"]
+                    for model_id in selected_cascade_models
+                }
+                analyst_label = get_model_config(analyst_model_id)["label"]
+                reviewer_label = get_model_config(reviewer_model_id)["label"]
+                senior_label = get_model_config(
+                    senior_reviewer_model_id
+                )["label"]
                 st.warning(
-                    "**Reviewed cascade is slower and costlier.** Haiku and "
-                    "Luna run for every requirement: Luna reviews Haiku's "
-                    "explicit verdict, evidence, and rationale while checking "
-                    "the report evidence. Terra is charged only when their "
-                    "classifications disagree. Sequential review uses standard "
-                    "API pricing."
+                    "**Reviewed cascade is slower and costlier.** "
+                    f"{analyst_label} and {reviewer_label} run for every "
+                    f"requirement. {senior_label} is charged only when their "
+                    "classifications disagree. The same model cannot occupy "
+                    "adjacent roles. Sequential review uses standard API "
+                    "pricing."
                 )
                 st.markdown("**Required credentials**")
-                anthropic_api_key = render_model_api_key(
-                    HAIKU_MODEL, "analysis_anthropic_api_key"
-                )
-                openai_api_key = render_model_api_key(
-                    LUNA_MODEL, "analysis_openai_api_key"
-                )
+                if "anthropic" in required_cascade_providers:
+                    anthropic_model = next(
+                        model_id
+                        for model_id in selected_cascade_models
+                        if get_model_config(model_id)["provider"] == "anthropic"
+                    )
+                    anthropic_api_key = render_model_api_key(
+                        anthropic_model, "analysis_anthropic_api_key"
+                    )
+                if "openai" in required_cascade_providers:
+                    openai_model = next(
+                        model_id
+                        for model_id in selected_cascade_models
+                        if get_model_config(model_id)["provider"] == "openai"
+                    )
+                    openai_api_key = render_model_api_key(
+                        openai_model, "analysis_openai_api_key"
+                    )
                 with st.expander("Model costs in this cascade"):
-                    st.markdown("**Haiku — initial assessment**")
-                    render_model_price_caption(HAIKU_MODEL)
-                    st.markdown("**Luna — reviews every assessment**")
-                    render_model_price_caption(LUNA_MODEL)
-                    st.markdown("**Terra — disagreements only**")
-                    render_model_price_caption(TERRA_MODEL)
+                    st.markdown(f"**Analyst — {analyst_label}**")
+                    render_model_price_caption(analyst_model_id)
+                    st.markdown(f"**Reviewer — {reviewer_label}**")
+                    render_model_price_caption(reviewer_model_id)
+                    st.markdown(
+                        f"**Senior reviewer — {senior_label} "
+                        "(disagreements only)**"
+                    )
+                    render_model_price_caption(senior_reviewer_model_id)
             else:
                 selected_model_id = st.selectbox(
                     "Analysis model",
@@ -2185,9 +2367,10 @@ def main():
             if is_review_cascade:
                 st.info(
                     "**Processing time:** Reviewed cascade makes two full "
-                    "sequential passes, plus conditional Terra calls. Vision "
-                    "also adds time because page images must be rendered, "
-                    "uploaded, and analysed."
+                    "sequential passes, plus conditional senior-reviewer "
+                    "calls. Higher-capability role choices can take "
+                    "substantially longer. Vision also adds time because page "
+                    "images must be rendered, uploaded, and analysed."
                 )
             else:
                 st.info(
@@ -2338,7 +2521,13 @@ def main():
 
         # Analyse button (full width)
         credentials_ready = (
-            bool(anthropic_api_key and openai_api_key)
+            (
+                ("anthropic" not in required_cascade_providers
+                 or bool(anthropic_api_key))
+                and
+                ("openai" not in required_cascade_providers
+                 or bool(openai_api_key))
+            )
             if is_review_cascade
             else bool(api_key)
         )
@@ -2354,9 +2543,15 @@ def main():
         ):
             if is_review_cascade and not credentials_ready:
                 missing_providers = []
-                if not anthropic_api_key:
+                if (
+                    "anthropic" in required_cascade_providers
+                    and not anthropic_api_key
+                ):
                     missing_providers.append("Anthropic")
-                if not openai_api_key:
+                if (
+                    "openai" in required_cascade_providers
+                    and not openai_api_key
+                ):
                     missing_providers.append("OpenAI")
                 st.error(
                     "Please enter the required "
@@ -2425,8 +2620,9 @@ def main():
                 selected_model = get_model_config(selected_model_id)
                 if is_review_cascade:
                     st.markdown(
-                        "### Running reviewed cascade: Haiku → Luna → "
-                        "conditional Terra..."
+                        "### Running reviewed cascade: "
+                        f"{analyst_label} → {reviewer_label} → conditional "
+                        f"{senior_label}..."
                     )
                 else:
                     st.markdown(
@@ -2457,6 +2653,11 @@ def main():
                                 progress_bar,
                                 requirement_refs,
                                 report_pages=report_pages,
+                                analyst_model_id=analyst_model_id,
+                                reviewer_model_id=reviewer_model_id,
+                                senior_reviewer_model_id=(
+                                    senior_reviewer_model_id
+                                ),
                             )
                         )
                     else:
@@ -2728,19 +2929,39 @@ def main():
                 incomplete_reviews = sum(
                     cascade_counts.get(status, 0)
                     for status in (
+                        "reviewer_failed",
+                        "senior_reviewer_failed",
                         "luna_review_failed",
                         "terra_review_failed",
                     )
                 )
+                agreement_count = (
+                    cascade_counts.get("analyst_reviewer_agree", 0)
+                    + cascade_counts.get("haiku_luna_agree", 0)
+                )
+                adjudication_count = (
+                    cascade_counts.get("senior_reviewer_adjudicated", 0)
+                    + cascade_counts.get("terra_adjudicated", 0)
+                )
+                cascade_example = cascade_results[0]
+                analyst_metric_label = cascade_role_label(
+                    cascade_example, "analyst"
+                )
+                reviewer_metric_label = cascade_role_label(
+                    cascade_example, "reviewer"
+                )
+                senior_metric_label = cascade_role_label(
+                    cascade_example, "senior_reviewer"
+                )
                 st.markdown("### Reviewed cascade checks")
                 metric_columns = st.columns(5)
                 metric_columns[0].metric(
-                    "Haiku + Luna agree",
-                    cascade_counts["haiku_luna_agree"],
+                    f"{analyst_metric_label} + {reviewer_metric_label} agree",
+                    agreement_count,
                 )
                 metric_columns[1].metric(
-                    "Terra adjudications",
-                    cascade_counts["terra_adjudicated"],
+                    f"{senior_metric_label} adjudications",
+                    adjudication_count,
                 )
                 metric_columns[2].metric(
                     "Three-way disagreements",

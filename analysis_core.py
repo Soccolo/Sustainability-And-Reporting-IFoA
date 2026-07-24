@@ -53,11 +53,15 @@ ALL_CLASSIFICATIONS = [
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 LUNA_MODEL = "gpt-5.6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
+SONNET_MODEL = "claude-sonnet-5"
+OPUS_MODEL = "claude-opus-4-8"
+SOL_MODEL = "gpt-5.6-sol"
 PRIMARY_MODEL = HAIKU_MODEL
 
 # One catalogue drives the picker, request routing, and cost estimates. Prices
 # are USD per million tokens and reflect first-party API list prices on
-# 2026-07-23. Both providers apply a 50% Batch API discount.
+# 2026-07-24. Both providers apply a 50% Batch API discount. Sonnet 5 uses
+# Anthropic's introductory pricing through 2026-08-31.
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
     HAIKU_MODEL: {
         "label": "Claude Haiku 4.5",
@@ -101,8 +105,62 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "long_input_multiplier": 2.0,
         "long_output_multiplier": 1.5,
     },
+    SONNET_MODEL: {
+        "label": "Claude Sonnet 5",
+        "provider": "anthropic",
+        "input_price": 2.0,
+        "cached_input_price": 0.2,
+        "cache_write_price": 2.5,
+        "output_price": 10.0,
+        "batch_input_price": 1.0,
+        "batch_output_price": 5.0,
+        "description": (
+            "High-capability Claude model; introductory pricing through "
+            "31 August 2026"
+        ),
+        "secret_name": "ANTHROPIC_API_KEY",
+        "adaptive_thinking": True,
+    },
+    OPUS_MODEL: {
+        "label": "Claude Opus 4.8 (latest Opus)",
+        "provider": "anthropic",
+        "input_price": 5.0,
+        "cached_input_price": 0.5,
+        "cache_write_price": 6.25,
+        "output_price": 25.0,
+        "batch_input_price": 2.5,
+        "batch_output_price": 12.5,
+        "description": (
+            "Latest available Opus model for demanding senior review"
+        ),
+        "secret_name": "ANTHROPIC_API_KEY",
+        "adaptive_thinking": True,
+    },
+    SOL_MODEL: {
+        "label": "GPT-5.6 Sol",
+        "provider": "openai",
+        "input_price": 5.0,
+        "cached_input_price": 0.5,
+        "cache_write_price": 6.25,
+        "output_price": 30.0,
+        "batch_input_price": 2.5,
+        "batch_output_price": 15.0,
+        "description": "Frontier GPT-5.6 model for complex senior review",
+        "secret_name": "OPENAI_API_KEY",
+        "long_context_threshold": 272_000,
+        "long_input_multiplier": 2.0,
+        "long_output_multiplier": 1.5,
+    },
 }
-USER_SELECTABLE_MODELS = tuple(MODEL_CATALOG)
+USER_SELECTABLE_MODELS = (HAIKU_MODEL, LUNA_MODEL, TERRA_MODEL)
+ANALYST_MODELS = (HAIKU_MODEL, LUNA_MODEL)
+REVIEWER_MODELS = (LUNA_MODEL, HAIKU_MODEL, TERRA_MODEL, SONNET_MODEL)
+SENIOR_REVIEWER_MODELS = (
+    TERRA_MODEL,
+    SONNET_MODEL,
+    OPUS_MODEL,
+    SOL_MODEL,
+)
 MODEL_PRICING_PER_MTOK = {
     model_id: (details["input_price"], details["output_price"])
     for model_id, details in MODEL_CATALOG.items()
@@ -128,6 +186,35 @@ def model_picker_label(model_id: str) -> str:
         f"{model['label']} — ${model['input_price']:g} input / "
         f"${model['output_price']:g} output per 1M tokens"
     )
+
+
+def validate_review_cascade_roles(
+    analyst_model_id: str,
+    reviewer_model_id: str,
+    senior_reviewer_model_id: str,
+) -> None:
+    """Validate role eligibility and adjacent-role separation."""
+    role_rules = (
+        ("Analyst", analyst_model_id, ANALYST_MODELS),
+        ("Reviewer", reviewer_model_id, REVIEWER_MODELS),
+        (
+            "Senior reviewer",
+            senior_reviewer_model_id,
+            SENIOR_REVIEWER_MODELS,
+        ),
+    )
+    for role, model_id, allowed_models in role_rules:
+        if model_id not in allowed_models:
+            raise ValueError(
+                f"{get_model_config(model_id)['label']} cannot be used as "
+                f"{role.lower()}."
+            )
+    if analyst_model_id == reviewer_model_id:
+        raise ValueError("The analyst and reviewer must be different models.")
+    if reviewer_model_id == senior_reviewer_model_id:
+        raise ValueError(
+            "The reviewer and senior reviewer must be different models."
+        )
 
 
 def extract_pdf_pages(
@@ -774,6 +861,11 @@ def _analyze_report_with_anthropic(
     batch_id_callback: Callable[[str], None] | None = None,
     client: Any | None = None,
     model_id: str = PRIMARY_MODEL,
+    requirement_id_filters: dict[str, set[str]] | None = None,
+    review_contexts: dict[str, dict[str, Any]] | None = None,
+    review_instruction: str | None = None,
+    usage_accumulator: dict[str, Any] | None = None,
+    results_accumulator: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Assess frameworks using Anthropic Messages or Message Batches."""
     model = get_model_config(model_id)
@@ -803,28 +895,52 @@ def _analyze_report_with_anthropic(
         topics = framework_requirements.get(framework)
         if not topics:
             continue
+        requirement_filter = (
+            requirement_id_filters.get(framework, set())
+            if requirement_id_filters is not None
+            else None
+        )
+        if requirement_id_filters is not None and not requirement_filter:
+            continue
         prompt, expected = _build_prompt(
             framework,
             framework_full_names.get(framework, framework),
             topics,
             requirement_refs,
+            only_requirement_ids=requirement_filter,
+            review_context=(
+                review_contexts.get(framework, {})
+                if review_contexts is not None
+                else None
+            ),
+            review_instruction=review_instruction,
         )
+        if not expected:
+            continue
+        request_params = {
+            "model": model_id,
+            # Adaptive thinking shares this output budget with the required
+            # JSON response, so newer Sonnet/Opus stages need more headroom.
+            "max_tokens": 32768 if model.get("adaptive_thinking") else 16384,
+            "system": system,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        *vision_blocks,
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        }
+        if model.get("adaptive_thinking"):
+            request_params["thinking"] = {"type": "adaptive"}
         prepared.append(
             {
                 "framework": framework,
                 "custom_id": _custom_id(index, framework),
                 "expected": expected,
-                "params": {
-                    "model": model_id,
-                    "max_tokens": 16384,
-                    "system": system,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [*vision_blocks, {"type": "text", "text": prompt}],
-                        }
-                    ],
-                },
+                "params": request_params,
             }
         )
 
@@ -849,22 +965,28 @@ def _analyze_report_with_anthropic(
                 "Messages API. Select a narrower PDF page range."
             )
 
-    results: list[dict[str, Any]] = []
-    usage_total: dict[str, Any] = {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "batch_input_tokens": 0,
-        "batch_output_tokens": 0,
-        "usage_records": [],
-        "models_used": set(),
-        "provider": "anthropic",
-        "selected_model": model_id,
-        "batch_api": bool(use_batch and prepared),
-        "batch_id": None,
-        "vision_pages": len(vision_blocks) // 2,
-    }
+    results = results_accumulator if results_accumulator is not None else []
+    usage_total = usage_accumulator if usage_accumulator is not None else {}
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "batch_input_tokens",
+        "batch_output_tokens",
+    ):
+        usage_total.setdefault(key, 0)
+    usage_total.setdefault("usage_records", [])
+    usage_total.setdefault("models_used", set())
+    usage_total.update(
+        {
+            "provider": "anthropic",
+            "selected_model": model_id,
+            "batch_api": bool(use_batch and prepared),
+            "batch_id": None,
+            "vision_pages": len(vision_blocks) // 2,
+        }
+    )
     failures: list[dict[str, Any]] = []
 
     if use_batch and prepared:
@@ -995,6 +1117,16 @@ def _analyze_report_with_anthropic(
             items = []
             topics = framework_requirements[framework]
             requirement_index = 1
+            requirement_filter = (
+                requirement_id_filters.get(framework, set())
+                if requirement_id_filters is not None
+                else None
+            )
+            framework_review_context = (
+                review_contexts.get(framework, {})
+                if review_contexts is not None
+                else None
+            )
             retry_vision_blocks = prepared_item["params"]["messages"][0][
                 "content"
             ][:-1]
@@ -1005,8 +1137,13 @@ def _analyze_report_with_anthropic(
                     {topic: requirements},
                     requirement_refs,
                     start_index=requirement_index,
+                    only_requirement_ids=requirement_filter,
+                    review_context=framework_review_context,
+                    review_instruction=review_instruction,
                 )
                 requirement_index += len(requirements)
+                if not topic_expected:
+                    continue
                 topic_params = {
                     **prepared_item["params"],
                     "messages": [
@@ -1557,16 +1694,16 @@ _CASCADE_VERDICT_FIELDS = (
     "rationale",
 )
 _CASCADE_STATUS_VALUES = (
-    "haiku_luna_agree",
-    "terra_adjudicated",
+    "analyst_reviewer_agree",
+    "senior_reviewer_adjudicated",
     "three_way_disagreement",
-    "luna_review_failed",
-    "terra_review_failed",
+    "reviewer_failed",
+    "senior_reviewer_failed",
 )
 _CASCADE_PROVISIONAL_STATUSES = {
     "three_way_disagreement",
-    "luna_review_failed",
-    "terra_review_failed",
+    "reviewer_failed",
+    "senior_reviewer_failed",
 }
 _CASCADE_USAGE_KEYS = (
     "input_tokens",
@@ -1672,6 +1809,15 @@ def _is_recoverable_cascade_stage_error(error: Exception) -> bool:
         RuntimeError,
         ConnectionError,
     ]
+    for error_name in (
+        "APIConnectionError",
+        "APITimeoutError",
+        "RateLimitError",
+        "InternalServerError",
+    ):
+        error_type = getattr(anthropic, error_name, None)
+        if isinstance(error_type, type):
+            recoverable.append(error_type)
     if openai is not None:
         for error_name in (
             "APIConnectionError",
@@ -1743,50 +1889,58 @@ def _summarise_cascade_results(
 def _cascade_confidence_reason(
     *,
     status: str,
-    haiku_result: dict[str, Any],
-    luna_result: dict[str, Any] | None = None,
-    terra_result: dict[str, Any] | None = None,
+    analyst_result: dict[str, Any],
+    analyst_label: str,
+    reviewer_label: str,
+    senior_label: str,
+    reviewer_result: dict[str, Any] | None = None,
+    senior_result: dict[str, Any] | None = None,
 ) -> str:
     """Explain deterministic confidence reconciliation without contradiction."""
-    haiku_confidence = haiku_result.get("confidence", "low")
-    if status == "luna_review_failed":
+    analyst_confidence = analyst_result.get("confidence", "low")
+    if status == "reviewer_failed":
         return (
-            "Luna review did not complete, so this Haiku verdict is provisional "
-            f"and requires human review. Haiku self-rated {haiku_confidence}: "
-            f"{haiku_result.get('confidence_reason', '')}"
+            f"{reviewer_label} review did not complete, so this "
+            f"{analyst_label} verdict is provisional and requires human "
+            f"review. {analyst_label} self-rated {analyst_confidence}: "
+            f"{analyst_result.get('confidence_reason', '')}"
         ).strip()
 
-    luna_result = luna_result or {}
-    luna_confidence = luna_result.get("confidence", "low")
-    if status == "haiku_luna_agree":
+    reviewer_result = reviewer_result or {}
+    reviewer_confidence = reviewer_result.get("confidence", "low")
+    if status == "analyst_reviewer_agree":
         return (
-            "Haiku and Luna agreed; final confidence uses the lower of their "
-            f"self-ratings (Haiku: {haiku_confidence}; Luna: "
-            f"{luna_confidence}). Luna review: "
-            f"{luna_result.get('confidence_reason', '')}"
+            f"{analyst_label} and {reviewer_label} agreed; final confidence "
+            f"uses the lower of their self-ratings ({analyst_label}: "
+            f"{analyst_confidence}; {reviewer_label}: "
+            f"{reviewer_confidence}). {reviewer_label} review: "
+            f"{reviewer_result.get('confidence_reason', '')}"
         ).strip()
-    if status == "terra_review_failed":
+    if status == "senior_reviewer_failed":
         return (
-            "Haiku and Luna disagreed and Terra review did not complete, so "
-            "Luna's displayed verdict is provisional and requires human "
-            f"review. Luna self-rated {luna_confidence}: "
-            f"{luna_result.get('confidence_reason', '')}"
+            f"{analyst_label} and {reviewer_label} disagreed and "
+            f"{senior_label} review did not complete, so {reviewer_label}'s "
+            "displayed verdict is provisional and requires human review. "
+            f"{reviewer_label} self-rated {reviewer_confidence}: "
+            f"{reviewer_result.get('confidence_reason', '')}"
         ).strip()
 
-    terra_result = terra_result or {}
-    terra_confidence = terra_result.get("confidence", "low")
+    senior_result = senior_result or {}
+    senior_confidence = senior_result.get("confidence", "low")
     if status == "three_way_disagreement":
         return (
-            "Haiku, Luna, and Terra assigned three different classifications; "
-            "the displayed Terra verdict is provisional and requires human "
-            f"review. Terra self-rated {terra_confidence}: "
-            f"{terra_result.get('confidence_reason', '')}"
+            f"{analyst_label}, {reviewer_label}, and {senior_label} assigned "
+            "three different classifications; the displayed senior-reviewer "
+            f"verdict is provisional and requires human review. {senior_label} "
+            f"self-rated {senior_confidence}: "
+            f"{senior_result.get('confidence_reason', '')}"
         ).strip()
     return (
-        "Haiku and Luna disagreed; Terra adjudicated the result. Final "
-        "confidence is capped at medium after model disagreement "
-        f"(Terra self-rated {terra_confidence}). Terra: "
-        f"{terra_result.get('confidence_reason', '')}"
+        f"{analyst_label} and {reviewer_label} disagreed; {senior_label} "
+        "adjudicated the result. Final confidence is capped at medium after "
+        f"model disagreement ({senior_label} self-rated "
+        f"{senior_confidence}). {senior_label}: "
+        f"{senior_result.get('confidence_reason', '')}"
     ).strip()
 
 
@@ -1803,33 +1957,67 @@ def analyze_report_with_review_cascade(
     status_callback: Callable[[str, str], None] | None = None,
     anthropic_client: Any | None = None,
     openai_client: Any | None = None,
+    analyst_model_id: str = HAIKU_MODEL,
+    reviewer_model_id: str = LUNA_MODEL,
+    senior_reviewer_model_id: str = TERRA_MODEL,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
-    """Run Haiku, audit every verdict with Luna, then adjudicate with Terra.
+    """Run a configurable analyst, reviewer, and conditional senior reviewer.
 
-    This deliberately uses standard requests for all stages. Terra receives
-    only requirements whose Haiku and Luna classifications differ.
+    Standard requests are used because each stage depends on the one before it.
+    The senior reviewer receives only requirements whose first two
+    classifications differ.
     """
-    if not isinstance(anthropic_api_key, str) or not anthropic_api_key.strip():
-        raise ValueError(
-            "Both Anthropic and OpenAI API keys are required for review cascade."
+    validate_review_cascade_roles(
+        analyst_model_id,
+        reviewer_model_id,
+        senior_reviewer_model_id,
+    )
+    role_models = {
+        "analyst": analyst_model_id,
+        "reviewer": reviewer_model_id,
+        "senior_reviewer": senior_reviewer_model_id,
+    }
+    role_configs = {
+        role: get_model_config(model_id)
+        for role, model_id in role_models.items()
+    }
+    required_providers = {
+        config["provider"] for config in role_configs.values()
+    }
+    if (
+        "anthropic" in required_providers
+        and (
+            not isinstance(anthropic_api_key, str)
+            or not anthropic_api_key.strip()
         )
-    if not isinstance(openai_api_key, str) or not openai_api_key.strip():
+    ):
         raise ValueError(
-            "Both Anthropic and OpenAI API keys are required for review cascade."
+            "An Anthropic API key is required for the selected cascade roles."
+        )
+    if (
+        "openai" in required_providers
+        and (
+            not isinstance(openai_api_key, str)
+            or not openai_api_key.strip()
+        )
+    ):
+        raise ValueError(
+            "An OpenAI API key is required for the selected cascade roles."
         )
 
-    # Resolve both providers before the first request so configuration errors
-    # cannot leave a partially completed, partially billed cascade.
+    # Resolve every required provider before the first billable request.
     resolved_anthropic = anthropic_client
-    if resolved_anthropic is None:
+    if "anthropic" in required_providers and resolved_anthropic is None:
         resolved_anthropic = anthropic.Anthropic(api_key=anthropic_api_key)
     resolved_openai = openai_client
-    if resolved_openai is None:
+    if "openai" in required_providers and resolved_openai is None:
         if openai is None:
-            raise RuntimeError(
-                _openai_unavailable_message("the review cascade")
-            )
+            raise RuntimeError(_openai_unavailable_message("the review cascade"))
         resolved_openai = openai.OpenAI(api_key=openai_api_key)
+
+    analyst_label = role_configs["analyst"]["label"]
+    reviewer_label = role_configs["reviewer"]["label"]
+    senior_label = role_configs["senior_reviewer"]["label"]
 
     def stage_progress(start: float, span: float) -> Callable[[float], None] | None:
         if progress_callback is None:
@@ -1840,23 +2028,75 @@ def analyze_report_with_review_cascade(
 
         return update
 
+    def run_stage(
+        model_id: str,
+        *,
+        progress: Callable[[float], None] | None,
+        requirement_filters: dict[str, set[str]] | None = None,
+        review_contexts: dict[str, dict[str, Any]] | None = None,
+        review_instruction: str | None = None,
+        reasoning_effort: str = "medium",
+        usage_accumulator: dict[str, Any] | None = None,
+        results_accumulator: list[dict[str, Any]] | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
+        config = get_model_config(model_id)
+        common = {
+            "report_text": report_text,
+            "selected_frameworks": selected_frameworks,
+            "api_key": (
+                anthropic_api_key
+                if config["provider"] == "anthropic"
+                else openai_api_key
+            ),
+            "framework_requirements": framework_requirements,
+            "framework_full_names": framework_full_names,
+            "requirement_refs": requirement_refs,
+            "report_pages": report_pages,
+            "use_batch": False,
+            "progress_callback": progress,
+            "status_callback": status_callback,
+            "client": (
+                resolved_anthropic
+                if config["provider"] == "anthropic"
+                else resolved_openai
+            ),
+            "model_id": model_id,
+            "requirement_id_filters": requirement_filters,
+            "review_contexts": review_contexts,
+            "review_instruction": review_instruction,
+            "usage_accumulator": usage_accumulator,
+            "results_accumulator": results_accumulator,
+        }
+        if config["provider"] == "anthropic":
+            return _analyze_report_with_anthropic(**common)
+        return _analyze_report_with_openai(
+            **common,
+            reasoning_effort=reasoning_effort,
+        )
+
     try:
-        # The Models API is a non-generation access check. Validate the shared
-        # OpenAI key and both possible reviewer models before Haiku incurs
-        # generation usage when the key permits that endpoint. Restricted keys
-        # may allow Responses writes without Models reads, so a non-auth,
-        # non-404 preflight failure must not reject an otherwise usable key.
+        # The Models API is a non-generation access check. Validate every
+        # selected OpenAI role before generation starts when the key permits
+        # that endpoint. Restricted keys can still allow Responses writes.
+        selected_openai_models = tuple(
+            dict.fromkeys(
+                model_id
+                for model_id in role_models.values()
+                if get_model_config(model_id)["provider"] == "openai"
+            )
+        )
         models_api = getattr(resolved_openai, "models", None)
         retrieve_model = getattr(models_api, "retrieve", None)
-        if callable(retrieve_model):
+        if selected_openai_models and callable(retrieve_model):
             if status_callback:
                 status_callback(
                     "info",
-                    "Checking OpenAI access to Luna and Terra before analysis.",
+                    "Checking OpenAI access to the selected cascade models "
+                    "before analysis.",
                 )
-            for reviewer_model in (LUNA_MODEL, TERRA_MODEL):
+            for selected_openai_model in selected_openai_models:
                 try:
-                    retrieve_model(reviewer_model)
+                    retrieve_model(selected_openai_model)
                 except Exception as error:
                     openai_auth_type = (
                         getattr(openai, "AuthenticationError", None)
@@ -1881,70 +2121,54 @@ def analyze_report_with_review_cascade(
                     ):
                         raise RuntimeError(
                             "The OpenAI API key cannot access the required "
-                            f"cascade model {reviewer_model}."
+                            f"cascade model {selected_openai_model}."
                         ) from error
                     if status_callback:
                         status_callback(
                             "warning",
-                            "Could not verify Luna/Terra access through the "
+                            "Could not verify the selected models through the "
                             "OpenAI Models endpoint. Continuing because "
                             "restricted keys may still permit Responses calls; "
-                            "the actual review request will validate access.",
+                            "the first applicable request will validate access.",
                         )
                     break
 
         if status_callback:
             status_callback(
                 "info",
-                "Cascade stage 1/3: Haiku is assessing every requirement.",
+                f"Cascade stage 1/3: {analyst_label} is assessing every "
+                "requirement.",
             )
-        haiku_results, _, haiku_usage = analyze_report(
-            report_text=report_text,
-            selected_frameworks=selected_frameworks,
-            api_key=anthropic_api_key,
-            framework_requirements=framework_requirements,
-            framework_full_names=framework_full_names,
-            requirement_refs=requirement_refs,
-            report_pages=report_pages,
-            use_batch=False,
-            progress_callback=stage_progress(0.0, 0.4),
-            status_callback=status_callback,
-            client=resolved_anthropic,
-            model_id=HAIKU_MODEL,
+        haiku_results, _, haiku_usage = run_stage(
+            analyst_model_id,
+            progress=stage_progress(0.0, 0.4),
         )
-        haiku_index = _index_cascade_results(haiku_results, "Haiku")
+        haiku_index = _index_cascade_results(
+            haiku_results, analyst_label
+        )
 
         if status_callback:
             status_callback(
                 "info",
-                "Cascade stage 2/3: Luna is independently reviewing every "
-                "Haiku verdict.",
+                f"Cascade stage 2/3: {reviewer_label} is independently "
+                f"reviewing every {analyst_label} verdict.",
             )
         luna_instruction = (
             "For each requirement, first assess the report evidence independently "
             "without relying on the prior verdict. Only after reaching an "
-            "independent view, audit the supplied Haiku record and correct it if "
-            "necessary. Return your own final verdict in the required schema."
+            f"independent view, audit the supplied {analyst_label} record and "
+            "correct it if necessary. Return your own final verdict in the "
+            "required schema."
         )
         luna_usage: dict[str, Any] = {}
         luna_results_buffer: list[dict[str, Any]] = []
         luna_stage_error: Exception | None = None
         try:
-            _analyze_report_with_openai(
-                report_text=report_text,
-                selected_frameworks=selected_frameworks,
-                api_key=openai_api_key,
-                framework_requirements=framework_requirements,
-                framework_full_names=framework_full_names,
-                requirement_refs=requirement_refs,
-                report_pages=report_pages,
-                use_batch=False,
-                progress_callback=stage_progress(0.4, 0.4),
-                status_callback=status_callback,
-                client=resolved_openai,
-                model_id=LUNA_MODEL,
+            run_stage(
+                reviewer_model_id,
+                progress=stage_progress(0.4, 0.4),
                 review_contexts=_cascade_review_contexts(
-                    haiku_index, "haiku"
+                    haiku_index, "analyst"
                 ),
                 review_instruction=luna_instruction,
                 reasoning_effort="medium",
@@ -1957,14 +2181,16 @@ def analyze_report_with_review_cascade(
             luna_stage_error = error
 
         try:
-            luna_index = _index_cascade_results(luna_results_buffer, "Luna")
+            luna_index = _index_cascade_results(
+                luna_results_buffer, reviewer_label
+            )
         except ValueError as error:
             luna_stage_error = error
             luna_index = {}
         unexpected_luna_keys = set(luna_index) - set(haiku_index)
         if unexpected_luna_keys:
             luna_stage_error = ValueError(
-                "Luna returned unexpected cascade requirement keys "
+                f"{reviewer_label} returned unexpected cascade requirement keys "
                 f"{sorted(unexpected_luna_keys)}."
             )
             luna_index = {
@@ -1975,16 +2201,18 @@ def analyze_report_with_review_cascade(
         luna_failed_keys = set(haiku_index) - set(luna_index)
         if luna_failed_keys:
             luna_stage_error = luna_stage_error or ValueError(
-                "Luna did not return every Haiku cascade requirement key."
+                f"{reviewer_label} did not return every {analyst_label} "
+                "cascade requirement key."
             )
 
         if luna_failed_keys:
             if status_callback:
                 status_callback(
                     "warning",
-                    "Luna review did not complete for "
-                    f"{len(luna_failed_keys)} requirement(s). Successful Luna "
-                    "reviews are retained; only missing reviews are provisional.",
+                    f"{reviewer_label} review did not complete for "
+                    f"{len(luna_failed_keys)} requirement(s). Successful "
+                    f"{reviewer_label} reviews are retained; only missing "
+                    "reviews are provisional.",
                 )
 
         disagreement_keys = {
@@ -2001,7 +2229,8 @@ def analyze_report_with_review_cascade(
             if status_callback:
                 status_callback(
                     "info",
-                    "Cascade stage 3/3: Terra is adjudicating only the "
+                    f"Cascade stage 3/3: {senior_label} is adjudicating only "
+                    "the "
                     f"{len(disagreement_keys)} disputed verdict(s).",
                 )
             terra_filters: dict[str, set[str]] = {}
@@ -2009,37 +2238,27 @@ def analyze_report_with_review_cascade(
             for framework, requirement_id in disagreement_keys:
                 terra_filters.setdefault(framework, set()).add(requirement_id)
                 terra_contexts.setdefault(framework, {})[requirement_id] = {
-                    "haiku": _cascade_verdict_snapshot(
+                    "analyst": _cascade_verdict_snapshot(
                         haiku_index[(framework, requirement_id)]
                     ),
-                    "luna": _cascade_verdict_snapshot(
+                    "reviewer": _cascade_verdict_snapshot(
                         luna_index[(framework, requirement_id)]
                     ),
                 }
             terra_instruction = (
                 "For each supplied disputed requirement, first assess the report "
                 "evidence independently without relying on either prior verdict. "
-                "Only after reaching an independent view, adjudicate the Haiku "
-                "and Luna disagreement and return your own final verdict in the "
-                "required schema."
+                f"Only after reaching an independent view, adjudicate the "
+                f"{analyst_label} and {reviewer_label} disagreement and return "
+                "your own final verdict in the required schema."
             )
             terra_usage = {}
             terra_results_buffer: list[dict[str, Any]] = []
             try:
-                _analyze_report_with_openai(
-                    report_text=report_text,
-                    selected_frameworks=selected_frameworks,
-                    api_key=openai_api_key,
-                    framework_requirements=framework_requirements,
-                    framework_full_names=framework_full_names,
-                    requirement_refs=requirement_refs,
-                    report_pages=report_pages,
-                    use_batch=False,
-                    progress_callback=stage_progress(0.8, 0.2),
-                    status_callback=status_callback,
-                    client=resolved_openai,
-                    model_id=TERRA_MODEL,
-                    requirement_id_filters=terra_filters,
+                run_stage(
+                    senior_reviewer_model_id,
+                    progress=stage_progress(0.8, 0.2),
+                    requirement_filters=terra_filters,
                     review_contexts=terra_contexts,
                     review_instruction=terra_instruction,
                     reasoning_effort="high",
@@ -2053,7 +2272,7 @@ def analyze_report_with_review_cascade(
 
             try:
                 terra_index = _index_cascade_results(
-                    terra_results_buffer, "Terra"
+                    terra_results_buffer, senior_label
                 )
             except ValueError as error:
                 terra_stage_error = error
@@ -2061,7 +2280,8 @@ def analyze_report_with_review_cascade(
             unexpected_terra_keys = set(terra_index) - disagreement_keys
             if unexpected_terra_keys:
                 terra_stage_error = ValueError(
-                    "Terra returned unexpected cascade requirement keys "
+                    f"{senior_label} returned unexpected cascade requirement "
+                    "keys "
                     f"{sorted(unexpected_terra_keys)}."
                 )
                 terra_index = {
@@ -2072,14 +2292,15 @@ def analyze_report_with_review_cascade(
             terra_failed_keys = disagreement_keys - set(terra_index)
             if terra_failed_keys:
                 terra_stage_error = terra_stage_error or ValueError(
-                    "Terra did not return every disputed cascade requirement key."
+                    f"{senior_label} did not return every disputed cascade "
+                    "requirement key."
                 )
 
             if terra_failed_keys:
                 if status_callback:
                     status_callback(
                         "warning",
-                        "Terra review did not complete for "
+                        f"{senior_label} review did not complete for "
                         f"{len(terra_failed_keys)} disputed requirement(s). "
                         "Successful adjudications are retained; only missing "
                         "adjudications are provisional.",
@@ -2087,7 +2308,8 @@ def analyze_report_with_review_cascade(
         elif status_callback:
             status_callback(
                 "info",
-                "Haiku and Luna agree on every classification; Terra was not called.",
+                f"{analyst_label} and {reviewer_label} agree on every "
+                f"classification; {senior_label} was not called.",
             )
 
         confidence_rank = {"low": 0, "medium": 1, "high": 2}
@@ -2107,16 +2329,19 @@ def analyze_report_with_review_cascade(
             haiku_result = haiku_index[key]
             if key in luna_failed_keys:
                 final_result = dict(haiku_result)
-                cascade_status = "luna_review_failed"
+                cascade_status = "reviewer_failed"
                 final_result["confidence"] = "low"
                 final_result["confidence_reason"] = _cascade_confidence_reason(
                     status=cascade_status,
-                    haiku_result=haiku_result,
+                    analyst_result=haiku_result,
+                    analyst_label=analyst_label,
+                    reviewer_label=reviewer_label,
+                    senior_label=senior_label,
                 )
-                models_consulted = [HAIKU_MODEL]
+                models_consulted = [analyst_model_id]
                 needs_human_review = True
                 verdicts = {
-                    "haiku": _cascade_verdict_snapshot(haiku_result)
+                    "analyst": _cascade_verdict_snapshot(haiku_result)
                 }
                 final_result.update(
                     {
@@ -2125,6 +2350,7 @@ def analyze_report_with_review_cascade(
                         "needs_human_review": needs_human_review,
                         "models_consulted": models_consulted,
                         "model_verdicts": verdicts,
+                        "role_models": dict(role_models),
                     }
                 )
                 final_results.append(final_result)
@@ -2132,8 +2358,8 @@ def analyze_report_with_review_cascade(
 
             luna_result = luna_index[key]
             verdicts = {
-                "haiku": _cascade_verdict_snapshot(haiku_result),
-                "luna": _cascade_verdict_snapshot(luna_result),
+                "analyst": _cascade_verdict_snapshot(haiku_result),
+                "reviewer": _cascade_verdict_snapshot(luna_result),
             }
             if key not in disagreement_keys:
                 final_result = dict(luna_result)
@@ -2144,28 +2370,36 @@ def analyze_report_with_review_cascade(
                     ),
                     key=confidence_rank.__getitem__,
                 )
-                cascade_status = "haiku_luna_agree"
+                cascade_status = "analyst_reviewer_agree"
                 final_result["confidence_reason"] = _cascade_confidence_reason(
                     status=cascade_status,
-                    haiku_result=haiku_result,
-                    luna_result=luna_result,
+                    analyst_result=haiku_result,
+                    analyst_label=analyst_label,
+                    reviewer_label=reviewer_label,
+                    senior_label=senior_label,
+                    reviewer_result=luna_result,
                 )
-                models_consulted = [HAIKU_MODEL, LUNA_MODEL]
+                models_consulted = [analyst_model_id, reviewer_model_id]
                 needs_human_review = final_result["confidence"] == "low"
             elif key in terra_failed_keys:
                 final_result = dict(luna_result)
                 final_result["confidence"] = "low"
-                cascade_status = "terra_review_failed"
+                cascade_status = "senior_reviewer_failed"
                 final_result["confidence_reason"] = _cascade_confidence_reason(
                     status=cascade_status,
-                    haiku_result=haiku_result,
-                    luna_result=luna_result,
+                    analyst_result=haiku_result,
+                    analyst_label=analyst_label,
+                    reviewer_label=reviewer_label,
+                    senior_label=senior_label,
+                    reviewer_result=luna_result,
                 )
-                models_consulted = [HAIKU_MODEL, LUNA_MODEL]
+                models_consulted = [analyst_model_id, reviewer_model_id]
                 needs_human_review = True
             else:
                 terra_result = terra_index[key]
-                verdicts["terra"] = _cascade_verdict_snapshot(terra_result)
+                verdicts["senior_reviewer"] = _cascade_verdict_snapshot(
+                    terra_result
+                )
                 final_result = dict(terra_result)
                 if final_result["confidence"] == "high":
                     final_result["confidence"] = "medium"
@@ -2178,18 +2412,21 @@ def analyze_report_with_review_cascade(
                     final_result["confidence"] = "low"
                     needs_human_review = True
                 else:
-                    cascade_status = "terra_adjudicated"
+                    cascade_status = "senior_reviewer_adjudicated"
                     needs_human_review = final_result["confidence"] == "low"
                 final_result["confidence_reason"] = _cascade_confidence_reason(
                     status=cascade_status,
-                    haiku_result=haiku_result,
-                    luna_result=luna_result,
-                    terra_result=terra_result,
+                    analyst_result=haiku_result,
+                    analyst_label=analyst_label,
+                    reviewer_label=reviewer_label,
+                    senior_label=senior_label,
+                    reviewer_result=luna_result,
+                    senior_result=terra_result,
                 )
                 models_consulted = [
-                    HAIKU_MODEL,
-                    LUNA_MODEL,
-                    TERRA_MODEL,
+                    analyst_model_id,
+                    reviewer_model_id,
+                    senior_reviewer_model_id,
                 ]
 
             final_result.update(
@@ -2199,6 +2436,7 @@ def analyze_report_with_review_cascade(
                     "needs_human_review": needs_human_review,
                     "models_consulted": models_consulted,
                     "model_verdicts": verdicts,
+                    "role_models": dict(role_models),
                 }
             )
             final_results.append(final_result)
@@ -2210,17 +2448,17 @@ def analyze_report_with_review_cascade(
         )
 
         stage_usage = [
-            ("haiku_initial", haiku_usage),
-            ("luna_review", luna_usage),
+            ("analyst", haiku_usage),
+            ("reviewer", luna_usage),
         ]
         if terra_usage is not None:
-            stage_usage.append(("terra_adjudication", terra_usage))
+            stage_usage.append(("senior_reviewer", terra_usage))
         usage = _aggregate_cascade_usage(stage_usage)
         failure_stages = []
         if luna_failed_keys:
-            failure_stages.append("luna_review")
+            failure_stages.append("reviewer")
         if terra_failed_keys:
-            failure_stages.append("terra_adjudication")
+            failure_stages.append("senior_reviewer")
         usage.update(
             {
                 "cascade_complete": not failure_stages,
@@ -2228,6 +2466,7 @@ def analyze_report_with_review_cascade(
                     failure_stages[0] if failure_stages else None
                 ),
                 "cascade_failure_stages": failure_stages,
+                "role_models": dict(role_models),
             }
         )
         return final_results, summaries, usage
