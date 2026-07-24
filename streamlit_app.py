@@ -27,6 +27,29 @@ from io import BytesIO
 from collections import defaultdict
 
 import report_drafter
+from startup_compat import import_module_with_exports
+
+_ANALYSIS_CORE_EXPORTS = (
+    "ANALYST_MODELS",
+    "AnalysisAuthenticationError",
+    "HAIKU_MODEL",
+    "LUNA_MODEL",
+    "MODEL_CATALOG",
+    "PRIMARY_MODEL",
+    "REVIEWER_MODELS",
+    "SENIOR_REVIEWER_MODELS",
+    "TERRA_MODEL",
+    "USER_SELECTABLE_MODELS",
+    "analyze_report",
+    "analyze_report_with_review_cascade",
+    "estimate_usage_cost",
+    "extract_pdf_pages",
+    "format_report_text",
+    "get_model_config",
+    "model_picker_label",
+)
+import_module_with_exports("analysis_core", _ANALYSIS_CORE_EXPORTS)
+
 from analysis_core import (
     ANALYST_MODELS,
     AnalysisAuthenticationError,
