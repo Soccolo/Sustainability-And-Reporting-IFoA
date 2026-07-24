@@ -14,7 +14,16 @@ import time
 from io import BytesIO
 from typing import Any, Callable, Iterable
 
-import anthropic
+
+def _load_optional_anthropic() -> tuple[Any | None, ImportError | None]:
+    """Load Anthropic without preventing OpenAI-only application startup."""
+    try:
+        import anthropic as anthropic_module
+    except ImportError as error:
+        # ImportError also covers dependency incompatibilities raised from
+        # inside the SDK, not only a completely missing package.
+        return None, error
+    return anthropic_module, None
 
 
 def _load_optional_openai() -> tuple[Any | None, ImportError | None]:
@@ -28,7 +37,18 @@ def _load_optional_openai() -> tuple[Any | None, ImportError | None]:
     return openai_module, None
 
 
+anthropic, _ANTHROPIC_IMPORT_ERROR = _load_optional_anthropic()
 openai, _OPENAI_IMPORT_ERROR = _load_optional_openai()
+
+
+def _anthropic_unavailable_message(purpose: str) -> str:
+    """Return a safe operator-facing message for a missing/broken Anthropic SDK."""
+    if _ANTHROPIC_IMPORT_ERROR is not None:
+        return (
+            f"The Anthropic SDK could not be loaded for {purpose}. Rebuild the "
+            "application dependencies from requirements.txt."
+        )
+    return f"The anthropic package is required for {purpose}"
 
 
 def _openai_unavailable_message(purpose: str) -> str:
@@ -791,7 +811,14 @@ def _anthropic_sync_request(
     for attempt in range(max_attempts):
         try:
             return client.messages.create(**params)
-        except anthropic.RateLimitError:
+        except Exception as error:
+            rate_limit_type = (
+                getattr(anthropic, "RateLimitError", None)
+                if anthropic is not None
+                else None
+            )
+            if rate_limit_type is None or not isinstance(error, rate_limit_type):
+                raise
             if attempt + 1 >= max_attempts:
                 raise
             time.sleep(2**attempt)
@@ -869,7 +896,12 @@ def _analyze_report_with_anthropic(
     model = get_model_config(model_id)
     if model["provider"] != "anthropic":
         raise ValueError(f"{model_id} is not an Anthropic model")
-    client = client or anthropic.Anthropic(api_key=api_key)
+    if client is None:
+        if anthropic is None:
+            raise RuntimeError(
+                _anthropic_unavailable_message("Anthropic analysis")
+            )
+        client = anthropic.Anthropic(api_key=api_key)
     system = _system_message(report_text)
     framework_count = sum(
         bool(framework_requirements.get(framework))
@@ -1012,8 +1044,17 @@ def _analyze_report_with_anthropic(
         else:
             try:
                 batch = client.messages.batches.create(requests=batch_requests)
-            except anthropic.APIStatusError as error:
-                if getattr(error, "status_code", None) != 413:
+            except Exception as error:
+                api_status_type = (
+                    getattr(anthropic, "APIStatusError", None)
+                    if anthropic is not None
+                    else None
+                )
+                if (
+                    api_status_type is None
+                    or not isinstance(error, api_status_type)
+                    or getattr(error, "status_code", None) != 413
+                ):
                     raise
                 if status_callback:
                     status_callback(
@@ -1674,10 +1715,17 @@ def analyze_report(
             return _analyze_report_with_anthropic(**common)
         return _analyze_report_with_openai(**common)
     except Exception as error:
-        auth_types = [anthropic.AuthenticationError]
+        auth_types = []
+        anthropic_auth_type = (
+            getattr(anthropic, "AuthenticationError", None)
+            if anthropic is not None
+            else None
+        )
+        if isinstance(anthropic_auth_type, type):
+            auth_types.append(anthropic_auth_type)
         if openai is not None and hasattr(openai, "AuthenticationError"):
             auth_types.append(openai.AuthenticationError)
-        if isinstance(error, tuple(auth_types)):
+        if auth_types and isinstance(error, tuple(auth_types)):
             raise AnalysisAuthenticationError(
                 f"Invalid {model['provider'].title()} API key"
             ) from error
@@ -1813,7 +1861,11 @@ def _is_recoverable_cascade_stage_error(error: Exception) -> bool:
         "RateLimitError",
         "InternalServerError",
     ):
-        error_type = getattr(anthropic, error_name, None)
+        error_type = (
+            getattr(anthropic, error_name, None)
+            if anthropic is not None
+            else None
+        )
         if isinstance(error_type, type):
             recoverable.append(error_type)
     if openai is not None:
@@ -2006,6 +2058,10 @@ def analyze_report_with_review_cascade(
     # Resolve every required provider before the first billable request.
     resolved_anthropic = anthropic_client
     if "anthropic" in required_providers and resolved_anthropic is None:
+        if anthropic is None:
+            raise RuntimeError(
+                _anthropic_unavailable_message("the review cascade")
+            )
         resolved_anthropic = anthropic.Anthropic(api_key=anthropic_api_key)
     resolved_openai = openai_client
     if "openai" in required_providers and resolved_openai is None:
@@ -2471,7 +2527,15 @@ def analyze_report_with_review_cascade(
     except AnalysisAuthenticationError:
         raise
     except Exception as error:
-        if isinstance(error, anthropic.AuthenticationError):
+        anthropic_auth_type = (
+            getattr(anthropic, "AuthenticationError", None)
+            if anthropic is not None
+            else None
+        )
+        if (
+            anthropic_auth_type is not None
+            and isinstance(error, anthropic_auth_type)
+        ):
             raise AnalysisAuthenticationError(
                 "Invalid Anthropic API key"
             ) from error

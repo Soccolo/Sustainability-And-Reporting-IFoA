@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 try:
     import anthropic  # noqa: F401
-except ModuleNotFoundError:
+except ImportError:
     fake_anthropic = types.ModuleType("anthropic")
     fake_anthropic.RateLimitError = type("RateLimitError", (Exception,), {})
     fake_anthropic.APIStatusError = type("APIStatusError", (Exception,), {})
@@ -199,6 +199,23 @@ def cascade_item(
 
 
 class AnalysisCoreTests(unittest.TestCase):
+    def test_optional_anthropic_loader_catches_nested_import_error(self):
+        real_import = __import__
+
+        def import_with_broken_anthropic(name, *args, **kwargs):
+            if name == "anthropic":
+                raise ImportError("simulated SDK dependency failure")
+            return real_import(name, *args, **kwargs)
+
+        with patch(
+            "builtins.__import__",
+            side_effect=import_with_broken_anthropic,
+        ):
+            module, error = analysis_core._load_optional_anthropic()
+
+        self.assertIsNone(module)
+        self.assertIsInstance(error, ImportError)
+
     def test_optional_openai_loader_catches_nested_import_error(self):
         real_import = __import__
 
@@ -523,20 +540,23 @@ class AnalysisCoreTests(unittest.TestCase):
             ]
         )
 
-        results, _, usage = analysis_core.analyze_report_with_review_cascade(
-            report_text="[Page 1] Evidence",
-            selected_frameworks=["FW A"],
-            anthropic_api_key="",
-            openai_api_key="openai-key",
-            framework_requirements={
-                "FW A": {"governance": ["Canonical requirement"]}
-            },
-            framework_full_names={"FW A": "Framework A"},
-            openai_client=openai_client,
-            analyst_model_id=analysis_core.LUNA_MODEL,
-            reviewer_model_id=analysis_core.TERRA_MODEL,
-            senior_reviewer_model_id=analysis_core.SOL_MODEL,
-        )
+        with patch.object(analysis_core, "anthropic", None):
+            results, _, usage = (
+                analysis_core.analyze_report_with_review_cascade(
+                    report_text="[Page 1] Evidence",
+                    selected_frameworks=["FW A"],
+                    anthropic_api_key="",
+                    openai_api_key="openai-key",
+                    framework_requirements={
+                        "FW A": {"governance": ["Canonical requirement"]}
+                    },
+                    framework_full_names={"FW A": "Framework A"},
+                    openai_client=openai_client,
+                    analyst_model_id=analysis_core.LUNA_MODEL,
+                    reviewer_model_id=analysis_core.TERRA_MODEL,
+                    senior_reviewer_model_id=analysis_core.SOL_MODEL,
+                )
+            )
 
         self.assertEqual(
             [call["model"] for call in openai_client.calls],
