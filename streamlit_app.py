@@ -1260,6 +1260,7 @@ def render_gap_analysis(results, framework_summaries):
     provisional_count = sum(
         is_provisional_cascade_result(result) for result in results
     )
+    resolved_count = len(results) - provisional_count
     gaps = [
         result
         for result in results
@@ -1276,7 +1277,12 @@ def render_gap_analysis(results, framework_summaries):
         )
 
     if not gaps:
-        if provisional_count:
+        if provisional_count and not resolved_count:
+            st.warning(
+                "No resolved verdicts are available yet. Review the "
+                "provisional items before assessing gaps."
+            )
+        elif provisional_count:
             st.success(
                 "No confirmed gaps were found among the resolved verdicts."
             )
@@ -2712,16 +2718,40 @@ def main():
                                 "cascade_failure_stage", "review"
                             )
                         ]
-                        failed_stage = ", ".join(
+                        failed_stage_labels = [
                             str(stage).replace("_", " ")
                             for stage in failed_stages
+                        ]
+                        failed_stage_subject = (
+                            f"The {failed_stage_labels[0]} stage"
+                            if len(failed_stage_labels) == 1
+                            else (
+                                "The "
+                                + " and ".join(failed_stage_labels)
+                                + " stages"
+                            )
+                        )
+                        failure_details = token_usage.get(
+                            "cascade_failure_details", {}
+                        )
+                        detail_messages = [
+                            str(detail.get("message", "")).strip()
+                            for detail in failure_details.values()
+                            if str(detail.get("message", "")).strip()
+                        ]
+                        failure_reason = (
+                            f" {' '.join(dict.fromkeys(detail_messages))}"
+                            if detail_messages
+                            else ""
                         )
                         st.warning(
-                            f"The {failed_stage} review stage(s) did not "
+                            f"{failed_stage_subject} did not "
                             "complete for every requirement. "
-                            "Earlier model results were retained as provisional "
-                            "items for human review; they were not silently "
-                            "re-run."
+                            "A bounded missing-only retry was attempted. "
+                            "Earlier successful results were retained, and "
+                            "remaining missing items are provisional for human "
+                            "review."
+                            f"{failure_reason}"
                         )
                     else:
                         st.success("Analysis complete!")
@@ -2879,6 +2909,9 @@ def main():
                 else:
                     c_pct = p_pct = d_pct = 0.0
                 fw_pct = s.get("avg_score", 0) * 100
+                fw_score_label = (
+                    f"{fw_pct:.0f}%" if scored_total else "N/A"
+                )
                 fw_provisional = int(s.get("provisional", 0) or 0)
                 provisional_note = (
                     f" &middot; {fw_provisional} provisional"
@@ -2892,7 +2925,7 @@ def main():
                     f'<span style="font-weight:600;font-size:13.5px;'
                     f'color:#152018;">{fw}</span>'
                     f'<span style="font-family:\'IBM Plex Mono\',monospace;'
-                    f'font-size:11.5px;color:#8A9488;">{fw_pct:.0f}% &middot; '
+                    f'font-size:11.5px;color:#8A9488;">{fw_score_label} &middot; '
                     f'{s.get("total", 0)} reqs'
                     f'{provisional_note}'
                     f'</span></div>'

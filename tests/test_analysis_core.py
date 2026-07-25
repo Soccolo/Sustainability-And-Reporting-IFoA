@@ -23,10 +23,18 @@ except ImportError:
 import analysis_core
 
 
-def message_for(items, input_tokens=100, output_tokens=20):
+def message_for(
+    items,
+    input_tokens=100,
+    output_tokens=20,
+    *,
+    wrapped=False,
+    stop_reason="end_turn",
+):
+    payload = {"items": items} if wrapped else items
     return SimpleNamespace(
-        stop_reason="end_turn",
-        content=[SimpleNamespace(type="text", text=json.dumps(items))],
+        stop_reason=stop_reason,
+        content=[SimpleNamespace(type="text", text=json.dumps(payload))],
         usage=SimpleNamespace(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -143,7 +151,10 @@ class SequencedAnthropicClient:
         self.calls.append(params)
         if not self._responses:
             raise AssertionError("Unexpected extra Anthropic request")
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 class SequencedOpenAIClient:
@@ -272,6 +283,92 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(analysis_core.normalise_confidence("uncertain"), "low")
         self.assertEqual(analysis_core.normalise_confidence("Moderate"), "medium")
         self.assertEqual(analysis_core.normalise_confidence("HIGH"), "high")
+
+    def test_only_response_and_transient_errors_are_recoverable_in_cascade(self):
+        self.assertTrue(
+            analysis_core._is_recoverable_cascade_stage_error(
+                analysis_core.AnalysisResponseError(
+                    "Model response was incomplete"
+                )
+            )
+        )
+        self.assertTrue(
+            analysis_core._is_recoverable_cascade_stage_error(
+                json.JSONDecodeError("bad JSON", "{", 0)
+            )
+        )
+        self.assertTrue(
+            analysis_core._is_recoverable_cascade_stage_error(
+                ConnectionError("connection failed")
+            )
+        )
+        self.assertFalse(
+            analysis_core._is_recoverable_cascade_stage_error(
+                ValueError("The request is too large")
+            )
+        )
+        self.assertFalse(
+            analysis_core._is_recoverable_cascade_stage_error(
+                RuntimeError("Local configuration failed")
+            )
+        )
+
+    def test_cascade_failure_details_are_stable_and_do_not_leak_errors(self):
+        secret = "SENSITIVE-UPSTREAM-DETAIL"
+        cases = [
+            (
+                json.JSONDecodeError(secret, "{", 0),
+                "invalid_json",
+            ),
+            (TimeoutError(secret), "timeout"),
+            (ConnectionError(secret), "connection_error"),
+            (
+                analysis_core.AnalysisResponseError(
+                    f"Response incomplete (max_output_tokens): {secret}"
+                ),
+                "response_truncated",
+            ),
+            (
+                analysis_core.AnalysisResponseError(
+                    f"Model refused the request: {secret}"
+                ),
+                "model_refusal",
+            ),
+            (
+                analysis_core.AnalysisResponseError(
+                    f"incomplete requirement set: {secret}"
+                ),
+                "incomplete_requirements",
+            ),
+            (ValueError(secret), "invalid_response"),
+            (RuntimeError(secret), "unknown_recoverable"),
+        ]
+
+        for error, expected_category in cases:
+            with self.subTest(expected_category=expected_category):
+                detail = analysis_core._cascade_failure_detail(error)
+                self.assertEqual(detail["category"], expected_category)
+                self.assertNotIn(secret, detail["message"])
+
+    def test_anthropic_subset_rejects_incomplete_payload(self):
+        expected = {
+            "R0001": {
+                "topic": "governance",
+                "reference": "",
+                "requirement": "Canonical requirement",
+            }
+        }
+
+        accepted, missing = (
+            analysis_core._normalise_unambiguous_item_subset(
+                "FW A",
+                [{"requirement_id": "R0001"}],
+                expected,
+            )
+        )
+
+        self.assertEqual(accepted, [])
+        self.assertEqual(missing, {"R0001"})
 
     def test_cost_estimate_includes_cache_and_batch_modifiers(self):
         cost, savings = analysis_core.estimate_usage_cost(
@@ -420,7 +517,7 @@ class AnalysisCoreTests(unittest.TestCase):
                             "medium",
                             "Analyst rationale.",
                         )
-                    ]
+                    ],
                 ),
                 message_for(
                     [
@@ -430,7 +527,8 @@ class AnalysisCoreTests(unittest.TestCase):
                             "medium",
                             "Reviewer rationale.",
                         )
-                    ]
+                    ],
+                    wrapped=True,
                 ),
                 message_for(
                     [
@@ -440,7 +538,8 @@ class AnalysisCoreTests(unittest.TestCase):
                             "high",
                             "Senior reviewer rationale.",
                         )
-                    ]
+                    ],
+                    wrapped=True,
                 ),
             ]
         )
@@ -475,6 +574,22 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(
             anthropic_client.calls[2]["thinking"], {"type": "adaptive"}
         )
+        self.assertEqual(anthropic_client.calls[1]["max_tokens"], 64_000)
+        self.assertEqual(anthropic_client.calls[2]["max_tokens"], 96_000)
+        self.assertEqual(
+            anthropic_client.calls[1]["output_config"]["effort"], "medium"
+        )
+        self.assertEqual(
+            anthropic_client.calls[2]["output_config"]["effort"], "high"
+        )
+        self.assertEqual(
+            anthropic_client.calls[1]["output_config"]["format"]["type"],
+            "json_schema",
+        )
+        self.assertEqual(
+            anthropic_client.calls[2]["output_config"]["format"]["schema"],
+            anthropic_client.calls[1]["output_config"]["format"]["schema"],
+        )
         self.assertIn(
             '"analyst"',
             anthropic_client.calls[1]["messages"][0]["content"][-1]["text"],
@@ -502,6 +617,340 @@ class AnalysisCoreTests(unittest.TestCase):
                 analysis_core.SONNET_MODEL,
                 analysis_core.OPUS_MODEL,
             },
+        )
+
+    def test_sonnet_review_chunks_and_retries_only_the_missing_requirement(self):
+        analyst_items = [
+            cascade_item(
+                f"R{index:04d}",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Analyst rationale {index}.",
+            )
+            for index in range(1, 6)
+        ]
+        reviewer_items = {
+            item["requirement_id"]: cascade_item(
+                item["requirement_id"],
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Reviewer rationale {item['requirement_id']}.",
+            )
+            for item in analyst_items
+        }
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(analyst_items),
+                message_for(
+                    [
+                        reviewer_items["R0001"],
+                        reviewer_items["R0002"],
+                        reviewer_items["R0004"],
+                    ],
+                    wrapped=True,
+                ),
+                message_for([reviewer_items["R0005"]], wrapped=True),
+                message_for([reviewer_items["R0003"]], wrapped=True),
+            ]
+        )
+
+        results, summaries, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            f"Requirement {index}" for index in range(1, 6)
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        self.assertEqual(
+            [call["model"] for call in anthropic_client.calls],
+            [
+                analysis_core.HAIKU_MODEL,
+                analysis_core.SONNET_MODEL,
+                analysis_core.SONNET_MODEL,
+                analysis_core.SONNET_MODEL,
+            ],
+        )
+        reviewer_prompts = [
+            call["messages"][0]["content"][-1]["text"]
+            for call in anthropic_client.calls[1:]
+        ]
+        self.assertIn("R0001. [governance]", reviewer_prompts[0])
+        self.assertIn("R0004. [governance]", reviewer_prompts[0])
+        self.assertNotIn("R0005. [governance]", reviewer_prompts[0])
+        self.assertIn("R0005. [governance]", reviewer_prompts[1])
+        self.assertNotIn("R0001. [governance]", reviewer_prompts[1])
+        self.assertIn("R0003. [governance]", reviewer_prompts[2])
+        for requirement_id in ("R0001", "R0002", "R0004", "R0005"):
+            self.assertNotIn(
+                f"{requirement_id}. [governance]", reviewer_prompts[2]
+            )
+        for call in anthropic_client.calls[1:]:
+            self.assertEqual(call["max_tokens"], 64_000)
+            self.assertEqual(call["output_config"]["effort"], "medium")
+            self.assertEqual(
+                call["output_config"]["format"]["type"], "json_schema"
+            )
+        self.assertEqual(len(results), 5)
+        self.assertTrue(
+            all(
+                result["cascade_status"] == "analyst_reviewer_agree"
+                for result in results
+            )
+        )
+        self.assertEqual(summaries["FW A"]["scored_total"], 5)
+        self.assertEqual(summaries["FW A"]["provisional"], 0)
+        self.assertTrue(usage["cascade_complete"])
+
+    def test_haiku_analyst_still_repairs_a_partial_response(self):
+        analyst_one = cascade_item(
+            "R0001",
+            analysis_core.CLASSIFICATION_COVERS,
+            "high",
+            "Analyst rationale one.",
+        )
+        analyst_two = cascade_item(
+            "R0002",
+            analysis_core.CLASSIFICATION_COVERS,
+            "high",
+            "Analyst rationale two.",
+        )
+        reviewer_items = [
+            cascade_item(
+                "R0001",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                "Reviewer rationale one.",
+            ),
+            cascade_item(
+                "R0002",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                "Reviewer rationale two.",
+            ),
+        ]
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for([analyst_one]),
+                message_for([analyst_two]),
+                message_for(reviewer_items, wrapped=True),
+            ]
+        )
+
+        results, _, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            "Requirement one",
+                            "Requirement two",
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        self.assertEqual(
+            [call["model"] for call in anthropic_client.calls],
+            [
+                analysis_core.HAIKU_MODEL,
+                analysis_core.HAIKU_MODEL,
+                analysis_core.SONNET_MODEL,
+            ],
+        )
+        analyst_retry_prompt = anthropic_client.calls[1]["messages"][0][
+            "content"
+        ][-1]["text"]
+        self.assertIn("R0002. [governance]", analyst_retry_prompt)
+        self.assertNotIn("R0001. [governance]", analyst_retry_prompt)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(usage["cascade_complete"])
+
+    def test_sonnet_continues_later_chunks_after_transient_chunk_failure(self):
+        analyst_items = [
+            cascade_item(
+                f"R{index:04d}",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Analyst rationale {index}.",
+            )
+            for index in range(1, 6)
+        ]
+        reviewer_items = [
+            cascade_item(
+                f"R{index:04d}",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Reviewer rationale {index}.",
+            )
+            for index in range(1, 6)
+        ]
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(analyst_items),
+                ConnectionError("first chunk unavailable"),
+                message_for([reviewer_items[4]], wrapped=True),
+                message_for(reviewer_items[:4], wrapped=True),
+            ]
+        )
+
+        results, _, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            f"Requirement {index}" for index in range(1, 6)
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        prompts = [
+            call["messages"][0]["content"][-1]["text"]
+            for call in anthropic_client.calls[1:]
+        ]
+        self.assertIn("R0001. [governance]", prompts[0])
+        self.assertIn("R0005. [governance]", prompts[1])
+        self.assertNotIn("R0001. [governance]", prompts[1])
+        self.assertIn("R0001. [governance]", prompts[2])
+        self.assertNotIn("R0005. [governance]", prompts[2])
+        self.assertEqual(len(results), 5)
+        self.assertTrue(usage["cascade_complete"])
+
+    def test_sonnet_truncation_gets_one_missing_only_cascade_retry(self):
+        analyst_items = [
+            cascade_item(
+                f"R{index:04d}",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Analyst rationale {index}.",
+            )
+            for index in range(1, 3)
+        ]
+        reviewer_items = [
+            cascade_item(
+                f"R{index:04d}",
+                analysis_core.CLASSIFICATION_COVERS,
+                "high",
+                f"Reviewer rationale {index}.",
+            )
+            for index in range(1, 3)
+        ]
+        statuses = []
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(analyst_items),
+                message_for(
+                    [],
+                    wrapped=True,
+                    stop_reason="max_tokens",
+                ),
+                message_for(reviewer_items, wrapped=True),
+            ]
+        )
+
+        results, _, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            "Requirement one",
+                            "Requirement two",
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                status_callback=lambda kind, message: statuses.append(
+                    (kind, message)
+                ),
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        self.assertEqual(len(anthropic_client.calls), 3)
+        self.assertEqual(len(results), 2)
+        self.assertTrue(usage["cascade_complete"])
+        self.assertEqual(usage["cascade_failure_details"], {})
+        self.assertTrue(
+            any(
+                "retrying only the 2 missing requirement(s)" in message
+                for _, message in statuses
+            )
+        )
+
+    def test_anthropic_structured_output_has_narrow_compatibility_fallback(self):
+        unsupported_error = type(
+            "UnsupportedStructuredOutput", (Exception,), {"status_code": 400}
+        )("output_config.format is not supported for this model")
+        expected_message = message_for([], wrapped=True)
+        client = SequencedAnthropicClient(
+            [unsupported_error, expected_message]
+        )
+        params = {
+            "model": analysis_core.OPUS_MODEL,
+            "max_tokens": 96_000,
+            "messages": [],
+            "output_config": {
+                "effort": "high",
+                "format": {
+                    "type": "json_schema",
+                    "schema": analysis_core._assessment_result_schema(),
+                },
+            },
+        }
+
+        message = analysis_core._anthropic_sync_request(
+            client, params, max_attempts=1
+        )
+
+        self.assertIs(message, expected_message)
+        self.assertIn("format", client.calls[0]["output_config"])
+        self.assertEqual(
+            client.calls[1]["output_config"],
+            {"effort": "high"},
+        )
+        self.assertEqual(
+            [call["model"] for call in client.calls],
+            [analysis_core.OPUS_MODEL, analysis_core.OPUS_MODEL],
         )
 
     def test_configurable_openai_only_cascade_needs_no_anthropic_key(self):
@@ -731,6 +1180,7 @@ class AnalysisCoreTests(unittest.TestCase):
                         {
                             "requirement_id": "R0001",
                             "topic": "metrics",
+                            "reference": "",
                             "requirement": "B requirement",
                             "classification": "Covers the framework",
                             "confidence": "high",
@@ -751,6 +1201,7 @@ class AnalysisCoreTests(unittest.TestCase):
                         {
                             "requirement_id": "R0001",
                             "topic": "governance",
+                            "reference": "",
                             "requirement": "A requirement",
                             "classification": "Partly covers the framework",
                             "confidence": "low",
@@ -902,6 +1353,9 @@ class AnalysisCoreTests(unittest.TestCase):
                     [
                         {
                             "requirement_id": "R0001",
+                            "topic": "governance",
+                            "reference": "",
+                            "requirement": "A requirement",
                             "classification": "Covers the framework",
                             "confidence": "high",
                             "confidence_reason": "Clear evidence.",
@@ -1046,9 +1500,14 @@ class AnalysisCoreTests(unittest.TestCase):
             [
                 {
                     "requirement_id": "R0001",
+                    "topic": "governance",
+                    "reference": "",
+                    "requirement": "A requirement",
                     "classification": "Covers the framework",
                     "confidence": "high",
+                    "confidence_reason": "Clear evidence.",
                     "rationale": "Complete.",
+                    "relevant_extracts": ["[Page 1] Evidence"],
                 }
             ],
             input_tokens=30,
@@ -1731,6 +2190,7 @@ class AnalysisCoreTests(unittest.TestCase):
                     ]
                 ),
                 ConnectionError("Luna B unavailable"),
+                ConnectionError("Luna B still unavailable"),
             ]
         )
 
@@ -1774,6 +2234,81 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(summaries["FW B"]["provisional"], 1)
         self.assertFalse(usage["cascade_complete"])
         self.assertEqual(usage["cascade_failure_stages"], ["reviewer"])
+
+    def test_openai_topic_success_is_retained_before_later_topic_failure(self):
+        haiku_client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst governance rationale.",
+                        ),
+                        cascade_item(
+                            "R0002",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst strategy rationale.",
+                        ),
+                    ]
+                )
+            ]
+        )
+        openai_client = SequencedOpenAIClient(
+            [
+                openai_response_body([]),
+                openai_response_body(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Reviewer governance rationale.",
+                        )
+                    ]
+                ),
+                ConnectionError("strategy request unavailable"),
+                openai_response_body(
+                    [
+                        cascade_item(
+                            "R0002",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Reviewer strategy rationale.",
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        results, summaries, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="openai-key",
+                framework_requirements={
+                    "FW A": {
+                        "governance": ["Governance requirement"],
+                        "strategy": ["Strategy requirement"],
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                anthropic_client=haiku_client,
+                openai_client=openai_client,
+            )
+        )
+
+        retry_prompt = openai_client.calls[3]["input"][0]["content"][-1][
+            "text"
+        ]
+        self.assertIn("R0002. [strategy]", retry_prompt)
+        self.assertNotIn("R0001. [governance]", retry_prompt)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(summaries["FW A"]["scored_total"], 2)
+        self.assertTrue(usage["cascade_complete"])
 
     def test_review_cascade_keeps_successful_terra_framework_on_later_failure(self):
         haiku_client = SequencedAnthropicClient(
@@ -1833,6 +2368,7 @@ class AnalysisCoreTests(unittest.TestCase):
                     ]
                 ),
                 ConnectionError("Terra B unavailable"),
+                ConnectionError("Terra B still unavailable"),
             ]
         )
 
@@ -1880,6 +2416,196 @@ class AnalysisCoreTests(unittest.TestCase):
             usage["cascade_failure_stages"], ["senior_reviewer"]
         )
 
+    def test_missing_sonnet_verdict_is_safe_provisional_not_false_agreement(self):
+        statuses = []
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst rationale one.",
+                        ),
+                        cascade_item(
+                            "R0002",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst rationale two.",
+                        ),
+                    ]
+                ),
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Reviewer agrees on one.",
+                        )
+                    ],
+                    wrapped=True,
+                ),
+                ConnectionError("SENSITIVE retry detail"),
+            ]
+        )
+
+        results, summaries, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            "Requirement one",
+                            "Requirement two",
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                status_callback=lambda kind, message: statuses.append(
+                    (kind, message)
+                ),
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        by_id = {result["requirement_id"]: result for result in results}
+        self.assertEqual(
+            by_id["R0001"]["cascade_status"],
+            "analyst_reviewer_agree",
+        )
+        self.assertEqual(
+            by_id["R0002"]["cascade_status"],
+            "reviewer_failed",
+        )
+        self.assertEqual(
+            by_id["R0002"]["cascade_failure_category"],
+            "connection_error",
+        )
+        self.assertTrue(by_id["R0002"]["needs_human_review"])
+        self.assertEqual(summaries["FW A"]["scored_total"], 1)
+        self.assertEqual(summaries["FW A"]["provisional"], 1)
+        status_text = " ".join(message for _, message in statuses)
+        self.assertNotIn("agree on every", status_text)
+        self.assertIn("full agreement was not established", status_text)
+        self.assertNotIn("SENSITIVE", status_text)
+        self.assertEqual(
+            usage["cascade_failure_details"]["reviewer"],
+            {
+                "category": "connection_error",
+                "message": (
+                    "The connection to the review model failed before completion."
+                ),
+                "missing_requirements": 1,
+                "retry_count": 1,
+            },
+        )
+        self.assertNotIn(
+            analysis_core.OPUS_MODEL,
+            [call["model"] for call in anthropic_client.calls],
+        )
+
+    def test_senior_failure_reason_is_attached_only_to_disputed_item(self):
+        failure_message = (
+            "The review model did not return every required verdict."
+        )
+        anthropic_client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst rationale one.",
+                        ),
+                        cascade_item(
+                            "R0002",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Analyst rationale two.",
+                        ),
+                    ]
+                ),
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Reviewer agrees on one.",
+                        ),
+                        cascade_item(
+                            "R0002",
+                            analysis_core.CLASSIFICATION_PARTLY,
+                            "medium",
+                            "Reviewer disagrees on two.",
+                        ),
+                    ],
+                    wrapped=True,
+                ),
+                message_for([], wrapped=True),
+                message_for([], wrapped=True),
+            ]
+        )
+
+        results, _, usage = (
+            analysis_core.analyze_report_with_review_cascade(
+                report_text="[Page 1] Evidence",
+                selected_frameworks=["FW A"],
+                anthropic_api_key="anthropic-key",
+                openai_api_key="",
+                framework_requirements={
+                    "FW A": {
+                        "governance": [
+                            "Requirement one",
+                            "Requirement two",
+                        ]
+                    }
+                },
+                framework_full_names={"FW A": "Framework A"},
+                anthropic_client=anthropic_client,
+                analyst_model_id=analysis_core.HAIKU_MODEL,
+                reviewer_model_id=analysis_core.SONNET_MODEL,
+                senior_reviewer_model_id=analysis_core.OPUS_MODEL,
+            )
+        )
+
+        by_id = {result["requirement_id"]: result for result in results}
+        self.assertEqual(
+            by_id["R0001"]["cascade_status"],
+            "analyst_reviewer_agree",
+        )
+        self.assertNotIn(
+            failure_message,
+            by_id["R0001"]["confidence_reason"],
+        )
+        self.assertEqual(
+            by_id["R0002"]["cascade_status"],
+            "senior_reviewer_failed",
+        )
+        self.assertIn(
+            failure_message,
+            by_id["R0002"]["confidence_reason"],
+        )
+        self.assertEqual(
+            by_id["R0002"]["cascade_failure_category"],
+            "incomplete_requirements",
+        )
+        self.assertEqual(
+            usage["cascade_failure_details"]["senior_reviewer"][
+                "missing_requirements"
+            ],
+            1,
+        )
+
     def test_review_cascade_retains_partial_results_and_billed_terra_usage(self):
         haiku_client = SequencedAnthropicClient(
             [
@@ -1913,6 +2639,8 @@ class AnalysisCoreTests(unittest.TestCase):
                 ),
                 openai_response_body([], input_tokens=300, output_tokens=30),
                 openai_response_body([], input_tokens=400, output_tokens=40),
+                openai_response_body([], input_tokens=500, output_tokens=50),
+                openai_response_body([], input_tokens=600, output_tokens=60),
             ]
         )
 
@@ -1958,6 +2686,8 @@ class AnalysisCoreTests(unittest.TestCase):
                 "reviewer",
                 "senior_reviewer",
                 "senior_reviewer",
+                "senior_reviewer",
+                "senior_reviewer",
             ],
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 0)
@@ -1982,6 +2712,8 @@ class AnalysisCoreTests(unittest.TestCase):
             [
                 openai_response_body([], input_tokens=200, output_tokens=20),
                 openai_response_body([], input_tokens=300, output_tokens=30),
+                openai_response_body([], input_tokens=400, output_tokens=40),
+                openai_response_body([], input_tokens=500, output_tokens=50),
             ]
         )
 
@@ -2012,7 +2744,7 @@ class AnalysisCoreTests(unittest.TestCase):
                 record["cascade_stage"]
                 for record in usage["usage_records"]
             ],
-            ["analyst", "reviewer", "reviewer"],
+            ["analyst", "reviewer", "reviewer", "reviewer", "reviewer"],
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 0)
         self.assertEqual(summaries["FW A"]["provisional"], 1)
