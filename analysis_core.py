@@ -69,6 +69,10 @@ ALL_CLASSIFICATIONS = [
     CLASSIFICATION_PARTLY,
     CLASSIFICATION_DOESNT,
 ]
+# Bump this exported marker whenever Streamlit and analysis-core behaviour must
+# be deployed atomically. The entry point requires the exact marker name, which
+# makes an older cached module reload once before any analysis function is bound.
+ANALYSIS_CORE_REVISION_20260725_RELIABLE_REVIEW = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
