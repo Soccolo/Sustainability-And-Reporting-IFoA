@@ -30,9 +30,9 @@ import report_drafter
 from startup_compat import import_module_with_exports
 
 _ANALYSIS_CORE_EXPORTS = (
-    # Revision-specific marker: a cached pre-PR11 analysis module has all the
+    # Revision-specific marker: a cached older analysis module can have all the
     # ordinary exports below, so this unique name triggers a one-time reload.
-    "ANALYSIS_CORE_REVISION_20260725_RELIABLE_REVIEW",
+    "ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "HAIKU_MODEL",
