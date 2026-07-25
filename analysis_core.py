@@ -69,6 +69,22 @@ ALL_CLASSIFICATIONS = [
     CLASSIFICATION_PARTLY,
     CLASSIFICATION_DOESNT,
 ]
+_ASSESSMENT_ITEM_FIELDS = {
+    "requirement_id",
+    "topic",
+    "reference",
+    "requirement",
+    "relevant_extracts",
+    "classification",
+    "confidence",
+    "confidence_reason",
+    "rationale",
+}
+
+
+class AnalysisResponseError(ValueError):
+    """A recoverable model-response failure, distinct from input/config errors."""
+
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
 LUNA_MODEL = "gpt-5.6-luna"
@@ -140,6 +156,8 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         ),
         "secret_name": "ANTHROPIC_API_KEY",
         "adaptive_thinking": True,
+        "structured_output": True,
+        "review_max_tokens": 64_000,
     },
     OPUS_MODEL: {
         "label": "Claude Opus 5",
@@ -153,6 +171,8 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "description": "Frontier Opus model for demanding senior review",
         "secret_name": "ANTHROPIC_API_KEY",
         "adaptive_thinking": True,
+        "structured_output": True,
+        "review_max_tokens": 96_000,
     },
     SOL_MODEL: {
         "label": "GPT-5.6 Sol",
@@ -411,8 +431,8 @@ def build_openai_vision_blocks(
     return blocks
 
 
-def _openai_result_schema() -> dict[str, Any]:
-    """Return the strict result contract shared by Luna and Terra."""
+def _assessment_result_schema() -> dict[str, Any]:
+    """Return the provider-neutral JSON schema for framework assessments."""
     item_properties = {
         "requirement_id": {"type": "string"},
         "topic": {"type": "string"},
@@ -434,24 +454,42 @@ def _openai_result_schema() -> dict[str, Any]:
         "rationale": {"type": "string"},
     }
     return {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": item_properties,
+                    "required": list(item_properties),
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["items"],
+        "additionalProperties": False,
+    }
+
+
+def _openai_result_schema() -> dict[str, Any]:
+    """Return the strict Responses API wrapper used by GPT-5.6 models."""
+    return {
         "type": "json_schema",
         "name": "framework_assessment",
         "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": item_properties,
-                        "required": list(item_properties),
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["items"],
-            "additionalProperties": False,
+        "schema": _assessment_result_schema(),
+    }
+
+
+def _anthropic_output_config(reasoning_effort: str) -> dict[str, Any]:
+    """Return Claude's native structured-output and effort configuration."""
+    return {
+        "effort": reasoning_effort,
+        "format": {
+            "type": "json_schema",
+            # Keep this schema constant so Anthropic can reuse its compiled
+            # grammar cache; exact requirement IDs are validated application-side.
+            "schema": _assessment_result_schema(),
         },
     }
 
@@ -656,31 +694,41 @@ def _parse_json_items(raw: str, *, wrapped: bool = False) -> list[dict[str, Any]
     parsed = json.loads(raw)
     if wrapped:
         if not isinstance(parsed, dict) or set(parsed) != {"items"}:
-            raise ValueError('Model response must be an object containing only "items"')
+            raise AnalysisResponseError(
+                'Model response must be an object containing only "items"'
+            )
         parsed = parsed["items"]
     if not isinstance(parsed, list):
-        raise ValueError("Model response must contain a JSON array")
+        raise AnalysisResponseError("Model response must contain a JSON array")
     if not all(isinstance(item, dict) for item in parsed):
-        raise ValueError("Every model result must be a JSON object")
+        raise AnalysisResponseError("Every model result must be a JSON object")
     return parsed
 
 
-def _parse_message(message: Any) -> list[dict[str, Any]]:
+def _parse_message(
+    message: Any,
+    *,
+    wrapped: bool = False,
+) -> list[dict[str, Any]]:
     if _get(message, "stop_reason") == "max_tokens":
-        raise ValueError("Response truncated (max_tokens reached)")
+        raise AnalysisResponseError("Response truncated (max_tokens reached)")
+    if _get(message, "stop_reason") == "refusal":
+        raise AnalysisResponseError(
+            "Model refused the structured assessment request"
+        )
     raw = "".join(
         str(_get(block, "text", ""))
         for block in _get(message, "content", [])
         if _get(block, "type") == "text"
     )
-    return _parse_json_items(raw)
+    return _parse_json_items(raw, wrapped=wrapped)
 
 
 def _parse_openai_response(response: Any) -> list[dict[str, Any]]:
     status = str(_get(response, "status", "completed") or "")
     if status == "incomplete":
         reason = _get(_get(response, "incomplete_details", {}), "reason", "unknown")
-        raise ValueError(f"Response incomplete ({reason})")
+        raise AnalysisResponseError(f"Response incomplete ({reason})")
     raw = str(_get(response, "output_text", "") or "")
     if not raw:
         parts: list[str] = []
@@ -736,7 +784,7 @@ def _validate_items(
     ):
         missing = sorted(set(expected) - set(returned_ids))
         extras = sorted(set(returned_ids) - set(expected))
-        raise ValueError(
+        raise AnalysisResponseError(
             "The selected model returned an incomplete requirement set "
             f"(missing={missing}, unexpected_or_duplicate={extras})."
         )
@@ -770,6 +818,49 @@ def _normalise_items(
             }
         )
     return normalised
+
+
+def _normalise_unambiguous_item_subset(
+    framework: str,
+    items: Iterable[dict[str, Any]],
+    expected: dict[str, dict[str, str]],
+) -> tuple[list[dict[str, Any]], set[str]]:
+    """Keep unique in-scope items and return only IDs that still need retrying."""
+    items = list(items)
+    counts: dict[str, int] = {}
+    for item in items:
+        requirement_id = str(item.get("requirement_id", ""))
+        counts[requirement_id] = counts.get(requirement_id, 0) + 1
+    accepted = [
+        item
+        for item in items
+        if (
+            str(item.get("requirement_id", "")) in expected
+            and counts[str(item.get("requirement_id", ""))] == 1
+            and set(item) == _ASSESSMENT_ITEM_FIELDS
+            and isinstance(item.get("requirement_id"), str)
+            and isinstance(item.get("topic"), str)
+            and isinstance(item.get("reference"), str)
+            and isinstance(item.get("requirement"), str)
+            and isinstance(item.get("relevant_extracts"), list)
+            and all(
+                isinstance(extract, str)
+                for extract in item["relevant_extracts"]
+            )
+            and item.get("classification") in ALL_CLASSIFICATIONS
+            and item.get("confidence") in {"high", "medium", "low"}
+            and isinstance(item.get("confidence_reason"), str)
+            and isinstance(item.get("rationale"), str)
+        )
+    ]
+    accepted_ids = {
+        str(item.get("requirement_id", ""))
+        for item in accepted
+    }
+    return (
+        _normalise_items(framework, accepted, expected),
+        set(expected) - accepted_ids,
+    )
 
 
 def _custom_id(index: int, framework: str) -> str:
@@ -808,21 +899,69 @@ def _anthropic_sync_request(
     max_attempts: int = 3,
 ) -> Any:
     """Retry transient rate limits without changing the user's chosen model."""
-    for attempt in range(max_attempts):
-        try:
-            return client.messages.create(**params)
-        except Exception as error:
-            rate_limit_type = (
-                getattr(anthropic, "RateLimitError", None)
-                if anthropic is not None
-                else None
+    def send(request_params: dict[str, Any]) -> Any:
+        for attempt in range(max_attempts):
+            try:
+                return client.messages.create(**request_params)
+            except Exception as error:
+                rate_limit_type = (
+                    getattr(anthropic, "RateLimitError", None)
+                    if anthropic is not None
+                    else None
+                )
+                if (
+                    rate_limit_type is None
+                    or not isinstance(error, rate_limit_type)
+                    or attempt + 1 >= max_attempts
+                ):
+                    raise
+                time.sleep(2**attempt)
+        raise RuntimeError("Anthropic request retry loop ended unexpectedly")
+
+    try:
+        return send(params)
+    except Exception as error:
+        output_config = params.get("output_config")
+        status_code = getattr(error, "status_code", None)
+        response = getattr(error, "response", None)
+        if status_code is None:
+            status_code = getattr(response, "status_code", None)
+        error_text = str(error).lower()
+        structured_output_unsupported = (
+            isinstance(output_config, dict)
+            and "format" in output_config
+            and status_code == 400
+            and ("not supported" in error_text or "unsupported" in error_text)
+            and any(
+                marker in error_text
+                for marker in (
+                    "output_config",
+                    "json_schema",
+                    "structured output",
+                    "format",
+                )
             )
-            if rate_limit_type is None or not isinstance(error, rate_limit_type):
-                raise
-            if attempt + 1 >= max_attempts:
-                raise
-            time.sleep(2**attempt)
-    raise RuntimeError("Anthropic request retry loop ended unexpectedly")
+        )
+        if not structured_output_unsupported:
+            raise
+
+        # Opus/Sonnet model rollouts can briefly precede structured-output
+        # availability in every region. Keep the requested model and adaptive
+        # thinking, but fall back narrowly to the same wrapped-JSON prompt.
+        fallback_params = dict(params)
+        if any(
+            marker in error_text
+            for marker in ("format", "json_schema", "structured output")
+        ):
+            fallback_output_config = dict(output_config)
+            fallback_output_config.pop("format", None)
+            if fallback_output_config:
+                fallback_params["output_config"] = fallback_output_config
+            else:
+                fallback_params.pop("output_config", None)
+        else:
+            fallback_params.pop("output_config", None)
+        return send(fallback_params)
 
 
 def _summarise_results(
@@ -889,6 +1028,9 @@ def _analyze_report_with_anthropic(
     requirement_id_filters: dict[str, set[str]] | None = None,
     review_contexts: dict[str, dict[str, Any]] | None = None,
     review_instruction: str | None = None,
+    reasoning_effort: str = "medium",
+    max_requirements_per_request: int | None = None,
+    retry_missing_items: bool = True,
     usage_accumulator: dict[str, Any] | None = None,
     results_accumulator: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
@@ -920,6 +1062,7 @@ def _analyze_report_with_anthropic(
         report_pages or [], max_encoded_bytes=vision_budget
     )
     prepared: list[dict[str, Any]] = []
+    structured_output = bool(model.get("structured_output"))
 
     for index, framework in enumerate(selected_frameworks):
         topics = framework_requirements.get(framework)
@@ -932,11 +1075,12 @@ def _analyze_report_with_anthropic(
         )
         if requirement_id_filters is not None and not requirement_filter:
             continue
-        prompt, expected = _build_prompt(
+        _, all_expected = _build_prompt(
             framework,
             framework_full_names.get(framework, framework),
             topics,
             requirement_refs,
+            wrap_items=structured_output,
             only_requirement_ids=requirement_filter,
             review_context=(
                 review_contexts.get(framework, {})
@@ -945,34 +1089,76 @@ def _analyze_report_with_anthropic(
             ),
             review_instruction=review_instruction,
         )
-        if not expected:
+        if not all_expected:
             continue
-        request_params = {
-            "model": model_id,
-            # Adaptive thinking shares this output budget with the required
-            # JSON response, so newer Sonnet/Opus stages need more headroom.
-            "max_tokens": 32768 if model.get("adaptive_thinking") else 16384,
-            "system": system,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        *vision_blocks,
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
-        }
-        if model.get("adaptive_thinking"):
-            request_params["thinking"] = {"type": "adaptive"}
-        prepared.append(
-            {
-                "framework": framework,
-                "custom_id": _custom_id(index, framework),
-                "expected": expected,
-                "params": request_params,
-            }
+        expected_ids = list(all_expected)
+        chunk_size = (
+            max(1, int(max_requirements_per_request))
+            if max_requirements_per_request
+            else len(expected_ids)
         )
+        id_chunks = [
+            expected_ids[start : start + chunk_size]
+            for start in range(0, len(expected_ids), chunk_size)
+        ]
+        for chunk_index, chunk_ids in enumerate(id_chunks):
+            chunk_filter = (
+                set(chunk_ids)
+                if max_requirements_per_request
+                else requirement_filter
+            )
+            prompt, expected = _build_prompt(
+                framework,
+                framework_full_names.get(framework, framework),
+                topics,
+                requirement_refs,
+                wrap_items=structured_output,
+                only_requirement_ids=chunk_filter,
+                review_context=(
+                    review_contexts.get(framework, {})
+                    if review_contexts is not None
+                    else None
+                ),
+                review_instruction=review_instruction,
+            )
+            request_params = {
+                "model": model_id,
+                # The ceiling covers both adaptive thinking and response text.
+                "max_tokens": int(
+                    model.get(
+                        "review_max_tokens",
+                        32_768 if model.get("adaptive_thinking") else 16_384,
+                    )
+                ),
+                "system": system,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            *vision_blocks,
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            }
+            if model.get("adaptive_thinking"):
+                request_params["thinking"] = {"type": "adaptive"}
+            if structured_output:
+                request_params["output_config"] = _anthropic_output_config(
+                    reasoning_effort
+                )
+            custom_id = _custom_id(index, framework)
+            if len(id_chunks) > 1:
+                custom_id = f"{custom_id}-part-{chunk_index + 1:02d}"
+            prepared.append(
+                {
+                    "framework": framework,
+                    "custom_id": custom_id,
+                    "expected": expected,
+                    "params": request_params,
+                    "wrapped": structured_output,
+                }
+            )
 
     # Enforce a safe per-request payload ceiling for both batch and standard
     # Messages calls. If JSON overhead pushes a request over the limit, first
@@ -1077,7 +1263,7 @@ def _analyze_report_with_anthropic(
                 status_callback(
                     "info",
                     f"{action} batch {batch.id}; waiting for "
-                    f"{len(prepared)} framework results.",
+                    f"{len(prepared)} request results.",
                 )
             started = time.monotonic()
             while _get(batch, "processing_status") != "ended":
@@ -1117,17 +1303,22 @@ def _analyze_report_with_anthropic(
                     batch_priced=True,
                 )
                 try:
-                    items = _validate_items(
-                        _parse_message(message), prepared_item["expected"]
+                    parsed_items = _parse_message(
+                        message,
+                        wrapped=prepared_item["wrapped"],
                     )
-                    results.extend(
-                        _normalise_items(
+                    accepted_items, missing_ids = (
+                        _normalise_unambiguous_item_subset(
                             prepared_item["framework"],
-                            items,
+                            parsed_items,
                             prepared_item["expected"],
                         )
                     )
                 except (ValueError, json.JSONDecodeError):
+                    failures.append(prepared_item)
+                    continue
+                results.extend(accepted_items)
+                if missing_ids:
                     failures.append(prepared_item)
 
             failures.extend(
@@ -1136,54 +1327,92 @@ def _analyze_report_with_anthropic(
     else:
         failures = list(prepared)
 
-    # Retrying only failed requests preserves a useful run when one batch item
-    # errors or returns malformed/truncated JSON.
+    # Preserve every valid item immediately. Missing or ambiguous IDs are
+    # retried individually so one truncated response cannot discard a framework.
+    unresolved_response_errors: list[Exception] = []
     for index, prepared_item in enumerate(failures):
         if status_callback and usage_total["batch_api"]:
             status_callback(
                 "warning",
                 f"Retrying {prepared_item['framework']} outside the batch after an incomplete batch result.",
             )
-        message = _anthropic_sync_request(client, prepared_item["params"])
-        _add_usage(usage_total, message, model_id)
         try:
-            items = _validate_items(
-                _parse_message(message), prepared_item["expected"]
+            message = _anthropic_sync_request(client, prepared_item["params"])
+        except Exception as error:
+            if (
+                retry_missing_items
+                or not _is_recoverable_cascade_stage_error(error)
+            ):
+                raise
+            unresolved_response_errors.append(error)
+            if progress_callback and not use_batch:
+                progress_callback((index + 1) / max(1, len(failures)))
+            continue
+        _add_usage(usage_total, message, model_id)
+        expected = prepared_item["expected"]
+        try:
+            parsed_items = _parse_message(
+                message,
+                wrapped=prepared_item["wrapped"],
             )
-        except (ValueError, json.JSONDecodeError):
-            # Large framework responses get a final topic-by-topic retry.
+        except (ValueError, json.JSONDecodeError) as error:
+            accepted_items: list[dict[str, Any]] = []
+            missing_ids = set(expected)
+            first_error: Exception = error
+        else:
+            accepted_items, missing_ids = _normalise_unambiguous_item_subset(
+                prepared_item["framework"],
+                parsed_items,
+                expected,
+            )
+            first_error = AnalysisResponseError(
+                "The selected model returned an incomplete requirement set."
+            )
+        existing_ids = {
+            result["requirement_id"]
+            for result in results
+            if result["framework"] == prepared_item["framework"]
+        }
+        results.extend(
+            item
+            for item in accepted_items
+            if item["requirement_id"] not in existing_ids
+        )
+        missing_ids -= existing_ids
+
+        if missing_ids and not retry_missing_items:
+            unresolved_response_errors.append(first_error)
+        elif missing_ids:
+            if status_callback:
+                status_callback(
+                    "warning",
+                    f"Retrying {len(missing_ids)} missing "
+                    f"{prepared_item['framework']} requirement(s) individually.",
+                )
             framework = prepared_item["framework"]
-            items = []
-            topics = framework_requirements[framework]
-            requirement_index = 1
-            requirement_filter = (
-                requirement_id_filters.get(framework, set())
-                if requirement_id_filters is not None
-                else None
-            )
+            retry_vision_blocks = prepared_item["params"]["messages"][0][
+                "content"
+            ][:-1]
             framework_review_context = (
                 review_contexts.get(framework, {})
                 if review_contexts is not None
                 else None
             )
-            retry_vision_blocks = prepared_item["params"]["messages"][0][
-                "content"
-            ][:-1]
-            for topic, requirements in topics.items():
-                topic_prompt, topic_expected = _build_prompt(
+            missing_errors: list[Exception] = []
+            for requirement_id in expected:
+                if requirement_id not in missing_ids:
+                    continue
+                retry_prompt, retry_expected = _build_prompt(
                     framework,
                     framework_full_names.get(framework, framework),
-                    {topic: requirements},
+                    framework_requirements[framework],
                     requirement_refs,
-                    start_index=requirement_index,
-                    only_requirement_ids=requirement_filter,
+                    wrap_items=prepared_item["wrapped"],
+                    only_requirement_ids={requirement_id},
                     review_context=framework_review_context,
                     review_instruction=review_instruction,
                 )
-                requirement_index += len(requirements)
-                if not topic_expected:
-                    continue
-                topic_params = {
+                retry_params = {
                     **prepared_item["params"],
                     "messages": [
                         {
@@ -1192,27 +1421,60 @@ def _analyze_report_with_anthropic(
                                 *retry_vision_blocks,
                                 {
                                     "type": "text",
-                                    "text": topic_prompt,
+                                    "text": retry_prompt,
                                 },
                             ],
                         }
                     ],
                 }
-                topic_message = _anthropic_sync_request(client, topic_params)
-                _add_usage(usage_total, topic_message, model_id)
-                topic_items = _validate_items(
-                    _parse_message(topic_message), topic_expected
+                try:
+                    retry_message = _anthropic_sync_request(
+                        client, retry_params
+                    )
+                except Exception as error:
+                    if not _is_recoverable_cascade_stage_error(error):
+                        raise
+                    missing_errors.append(error)
+                    continue
+                _add_usage(usage_total, retry_message, model_id)
+                try:
+                    retry_items = _parse_message(
+                        retry_message,
+                        wrapped=prepared_item["wrapped"],
+                    )
+                except (ValueError, json.JSONDecodeError) as error:
+                    missing_errors.append(error)
+                    continue
+                retry_accepted, retry_missing = (
+                    _normalise_unambiguous_item_subset(
+                        framework,
+                        retry_items,
+                        retry_expected,
+                    )
                 )
-                items.extend(
-                    _normalise_items(framework, topic_items, topic_expected)
-                )
-        else:
-            items = _normalise_items(
-                prepared_item["framework"], items, prepared_item["expected"]
-            )
-        results.extend(items)
+                results.extend(retry_accepted)
+                if retry_missing:
+                    missing_errors.append(
+                        AnalysisResponseError(
+                            "The selected model did not return the requested "
+                            f"requirement {requirement_id}."
+                        )
+                    )
+            if missing_errors:
+                unresolved_response_errors.extend(missing_errors)
+            elif not missing_ids.issubset(
+                {
+                    result["requirement_id"]
+                    for result in results
+                    if result["framework"] == framework
+                }
+            ):
+                unresolved_response_errors.append(first_error)
         if progress_callback and not use_batch:
             progress_callback((index + 1) / max(1, len(failures)))
+
+    if unresolved_response_errors:
+        raise unresolved_response_errors[-1]
 
     framework_summaries = _summarise_results(
         results, selected_frameworks, progress_callback
@@ -1653,7 +1915,7 @@ def _analyze_report_with_openai(
                     _parse_openai_response(topic_response),
                     topic_expected,
                 )
-                items.extend(
+                results.extend(
                     _normalise_items(framework, topic_items, topic_expected)
                 )
         else:
@@ -1795,6 +2057,34 @@ def _index_cascade_results(
     return indexed
 
 
+def _index_unambiguous_cascade_results(
+    results: Iterable[dict[str, Any]],
+) -> tuple[
+    dict[tuple[str, str], dict[str, Any]],
+    set[tuple[str, str]],
+]:
+    """Index unique stage results while isolating only duplicated keys."""
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for result in results:
+        key = (
+            str(result.get("framework", "")),
+            str(result.get("requirement_id", "")),
+        )
+        grouped.setdefault(key, []).append(result)
+    duplicates = {
+        key for key, matching_results in grouped.items()
+        if len(matching_results) > 1
+    }
+    return (
+        {
+            key: matching_results[0]
+            for key, matching_results in grouped.items()
+            if key not in duplicates
+        },
+        duplicates,
+    )
+
+
 def _cascade_review_contexts(
     indexed_results: dict[tuple[str, str], dict[str, Any]],
     model_name: str,
@@ -1850,9 +2140,9 @@ def _aggregate_cascade_usage(
 def _is_recoverable_cascade_stage_error(error: Exception) -> bool:
     """Return whether a provider/reconciliation failure can yield partial results."""
     recoverable: list[type[BaseException]] = [
-        ValueError,
+        AnalysisResponseError,
+        json.JSONDecodeError,
         TimeoutError,
-        RuntimeError,
         ConnectionError,
     ]
     for error_name in (
@@ -1879,6 +2169,99 @@ def _is_recoverable_cascade_stage_error(error: Exception) -> bool:
             if isinstance(error_type, type):
                 recoverable.append(error_type)
     return isinstance(error, tuple(recoverable))
+
+
+def _cascade_failure_detail(error: Exception | None) -> dict[str, str]:
+    """Return a stable, non-sensitive category and explanation for the UI."""
+    if error is None:
+        return {
+            "category": "incomplete_requirements",
+            "message": "The review model did not return every required verdict.",
+        }
+    if isinstance(error, json.JSONDecodeError):
+        return {
+            "category": "invalid_json",
+            "message": "The review model returned a response that could not be parsed.",
+        }
+    if isinstance(error, TimeoutError):
+        return {
+            "category": "timeout",
+            "message": "The review model timed out before completing its verdicts.",
+        }
+    if isinstance(error, ConnectionError):
+        return {
+            "category": "connection_error",
+            "message": (
+                "The connection to the review model failed before completion."
+            ),
+        }
+
+    provider_modules = [module for module in (anthropic, openai) if module]
+    for error_name, category, message in (
+        (
+            "RateLimitError",
+            "rate_limited",
+            "The provider rate-limited the review model after automatic retries.",
+        ),
+        (
+            "APITimeoutError",
+            "timeout",
+            "The review model timed out before completing its verdicts.",
+        ),
+        (
+            "APIConnectionError",
+            "connection_error",
+            "The connection to the review model failed before completion.",
+        ),
+        (
+            "InternalServerError",
+            "provider_service_error",
+            "The provider returned a temporary service error.",
+        ),
+    ):
+        for module in provider_modules:
+            error_type = getattr(module, error_name, None)
+            if isinstance(error_type, type) and isinstance(error, error_type):
+                return {"category": category, "message": message}
+
+    error_text = str(error).lower()
+    if isinstance(error, ValueError):
+        if (
+            "max_tokens" in error_text
+            or "max_output_tokens" in error_text
+            or "truncated" in error_text
+        ):
+            return {
+                "category": "response_truncated",
+                "message": (
+                    "The review model reached its output limit before completing "
+                    "the structured response."
+                ),
+            }
+        if "refus" in error_text:
+            return {
+                "category": "model_refusal",
+                "message": (
+                    "The review model declined the structured assessment request."
+                ),
+            }
+        if "incomplete" in error_text or "requirement" in error_text:
+            return {
+                "category": "incomplete_requirements",
+                "message": (
+                    "The review model did not return every required verdict."
+                ),
+            }
+        return {
+            "category": "invalid_response",
+            "message": "The review model returned an invalid structured response.",
+        }
+    return {
+        "category": "unknown_recoverable",
+        "message": (
+            "The review model did not complete because of a recoverable error."
+        ),
+    }
 
 
 def _summarise_cascade_results(
@@ -2090,6 +2473,8 @@ def analyze_report_with_review_cascade(
         review_contexts: dict[str, dict[str, Any]] | None = None,
         review_instruction: str | None = None,
         reasoning_effort: str = "medium",
+        max_requirements_per_request: int | None = None,
+        retry_missing_items: bool = True,
         usage_accumulator: dict[str, Any] | None = None,
         results_accumulator: list[dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
@@ -2122,11 +2507,44 @@ def analyze_report_with_review_cascade(
             "results_accumulator": results_accumulator,
         }
         if config["provider"] == "anthropic":
-            return _analyze_report_with_anthropic(**common)
+            return _analyze_report_with_anthropic(
+                **common,
+                reasoning_effort=reasoning_effort,
+                max_requirements_per_request=max_requirements_per_request,
+                retry_missing_items=retry_missing_items,
+            )
         return _analyze_report_with_openai(
             **common,
             reasoning_effort=reasoning_effort,
         )
+
+    def reconcile_stage_results(
+        buffer: list[dict[str, Any]],
+        allowed_keys: set[tuple[str, str]],
+        stage_label: str,
+    ) -> tuple[
+        dict[tuple[str, str], dict[str, Any]],
+        Exception | None,
+    ]:
+        indexed, duplicate_keys = _index_unambiguous_cascade_results(buffer)
+        unexpected_keys = set(indexed) - allowed_keys
+        indexed = {
+            key: result
+            for key, result in indexed.items()
+            if key in allowed_keys
+        }
+        # Remove ambiguous or out-of-scope records before any missing-only retry.
+        buffer[:] = list(indexed.values())
+        invalid_keys = duplicate_keys | unexpected_keys
+        if invalid_keys:
+            return (
+                indexed,
+                AnalysisResponseError(
+                    f"{stage_label} returned ambiguous or unexpected cascade "
+                    f"requirement keys {sorted(invalid_keys)}."
+                ),
+            )
+        return indexed, None
 
     try:
         # The Models API is a non-generation access check. Validate every
@@ -2216,58 +2634,93 @@ def analyze_report_with_review_cascade(
         )
         luna_usage: dict[str, Any] = {}
         luna_results_buffer: list[dict[str, Any]] = []
-        luna_stage_error: Exception | None = None
+        luna_stage_errors: list[Exception] = []
+        luna_retry_count = 0
+        reviewer_contexts = _cascade_review_contexts(haiku_index, "analyst")
         try:
             run_stage(
                 reviewer_model_id,
                 progress=stage_progress(0.4, 0.4),
-                review_contexts=_cascade_review_contexts(
-                    haiku_index, "analyst"
-                ),
+                review_contexts=reviewer_contexts,
                 review_instruction=luna_instruction,
                 reasoning_effort="medium",
+                max_requirements_per_request=4,
+                retry_missing_items=False,
                 usage_accumulator=luna_usage,
                 results_accumulator=luna_results_buffer,
             )
         except Exception as error:
             if not _is_recoverable_cascade_stage_error(error):
                 raise
-            luna_stage_error = error
+            luna_stage_errors.append(error)
 
-        try:
-            luna_index = _index_cascade_results(
-                luna_results_buffer, reviewer_label
-            )
-        except ValueError as error:
-            luna_stage_error = error
-            luna_index = {}
-        unexpected_luna_keys = set(luna_index) - set(haiku_index)
-        if unexpected_luna_keys:
-            luna_stage_error = ValueError(
-                f"{reviewer_label} returned unexpected cascade requirement keys "
-                f"{sorted(unexpected_luna_keys)}."
-            )
-            luna_index = {
-                key: result
-                for key, result in luna_index.items()
-                if key in haiku_index
-            }
-        luna_failed_keys = set(haiku_index) - set(luna_index)
+        expected_luna_keys = set(haiku_index)
+        luna_index, reconciliation_error = reconcile_stage_results(
+            luna_results_buffer,
+            expected_luna_keys,
+            reviewer_label,
+        )
+        if reconciliation_error is not None:
+            luna_stage_errors.append(reconciliation_error)
+        luna_failed_keys = expected_luna_keys - set(luna_index)
+
         if luna_failed_keys:
-            luna_stage_error = luna_stage_error or ValueError(
+            luna_retry_count = 1
+            if status_callback:
+                status_callback(
+                    "warning",
+                    f"{reviewer_label} is retrying only the "
+                    f"{len(luna_failed_keys)} missing requirement(s).",
+                )
+            retry_filters: dict[str, set[str]] = {}
+            for framework, requirement_id in luna_failed_keys:
+                retry_filters.setdefault(framework, set()).add(requirement_id)
+            try:
+                run_stage(
+                    reviewer_model_id,
+                    progress=None,
+                    requirement_filters=retry_filters,
+                    review_contexts=reviewer_contexts,
+                    review_instruction=luna_instruction,
+                    reasoning_effort="medium",
+                    max_requirements_per_request=4,
+                    retry_missing_items=False,
+                    usage_accumulator=luna_usage,
+                    results_accumulator=luna_results_buffer,
+                )
+            except Exception as error:
+                if not _is_recoverable_cascade_stage_error(error):
+                    raise
+                luna_stage_errors.append(error)
+            luna_index, reconciliation_error = reconcile_stage_results(
+                luna_results_buffer,
+                expected_luna_keys,
+                reviewer_label,
+            )
+            if reconciliation_error is not None:
+                luna_stage_errors.append(reconciliation_error)
+            luna_failed_keys = expected_luna_keys - set(luna_index)
+
+        luna_stage_error = (
+            luna_stage_errors[-1] if luna_stage_errors else None
+        )
+        if luna_failed_keys:
+            luna_stage_error = luna_stage_error or AnalysisResponseError(
                 f"{reviewer_label} did not return every {analyst_label} "
                 "cascade requirement key."
             )
-
-        if luna_failed_keys:
+            luna_failure_detail = _cascade_failure_detail(luna_stage_error)
             if status_callback:
                 status_callback(
                     "warning",
                     f"{reviewer_label} review did not complete for "
                     f"{len(luna_failed_keys)} requirement(s). Successful "
                     f"{reviewer_label} reviews are retained; only missing "
-                    "reviews are provisional.",
+                    "reviews are provisional. "
+                    f"{luna_failure_detail['message']}",
                 )
+        else:
+            luna_failure_detail = None
 
         disagreement_keys = {
             key
@@ -2279,6 +2732,8 @@ def analyze_report_with_review_cascade(
         terra_usage: dict[str, Any] | None = None
         terra_failed_keys: set[tuple[str, str]] = set()
         terra_stage_error: Exception | None = None
+        terra_failure_detail: dict[str, str] | None = None
+        terra_retry_count = 0
         if disagreement_keys:
             if status_callback:
                 status_callback(
@@ -2308,6 +2763,7 @@ def analyze_report_with_review_cascade(
             )
             terra_usage = {}
             terra_results_buffer: list[dict[str, Any]] = []
+            terra_stage_errors: list[Exception] = []
             try:
                 run_stage(
                     senior_reviewer_model_id,
@@ -2316,55 +2772,106 @@ def analyze_report_with_review_cascade(
                     review_contexts=terra_contexts,
                     review_instruction=terra_instruction,
                     reasoning_effort="high",
+                    max_requirements_per_request=4,
+                    retry_missing_items=False,
                     usage_accumulator=terra_usage,
                     results_accumulator=terra_results_buffer,
                 )
             except Exception as error:
                 if not _is_recoverable_cascade_stage_error(error):
                     raise
-                terra_stage_error = error
+                terra_stage_errors.append(error)
 
-            try:
-                terra_index = _index_cascade_results(
-                    terra_results_buffer, senior_label
+            terra_index, reconciliation_error = reconcile_stage_results(
+                terra_results_buffer,
+                disagreement_keys,
+                senior_label,
+            )
+            if reconciliation_error is not None:
+                terra_stage_errors.append(reconciliation_error)
+            terra_failed_keys = disagreement_keys - set(terra_index)
+
+            if terra_failed_keys:
+                terra_retry_count = 1
+                if status_callback:
+                    status_callback(
+                        "warning",
+                        f"{senior_label} is retrying only the "
+                        f"{len(terra_failed_keys)} missing disputed "
+                        "requirement(s).",
+                    )
+                terra_retry_filters: dict[str, set[str]] = {}
+                for framework, requirement_id in terra_failed_keys:
+                    terra_retry_filters.setdefault(framework, set()).add(
+                        requirement_id
+                    )
+                try:
+                    run_stage(
+                        senior_reviewer_model_id,
+                        progress=None,
+                        requirement_filters=terra_retry_filters,
+                        review_contexts=terra_contexts,
+                        review_instruction=terra_instruction,
+                        reasoning_effort="high",
+                        max_requirements_per_request=4,
+                        retry_missing_items=False,
+                        usage_accumulator=terra_usage,
+                        results_accumulator=terra_results_buffer,
+                    )
+                except Exception as error:
+                    if not _is_recoverable_cascade_stage_error(error):
+                        raise
+                    terra_stage_errors.append(error)
+                terra_index, reconciliation_error = reconcile_stage_results(
+                    terra_results_buffer,
+                    disagreement_keys,
+                    senior_label,
                 )
-            except ValueError as error:
-                terra_stage_error = error
-                terra_index = {}
-            unexpected_terra_keys = set(terra_index) - disagreement_keys
-            if unexpected_terra_keys:
-                terra_stage_error = ValueError(
-                    f"{senior_label} returned unexpected cascade requirement "
-                    "keys "
-                    f"{sorted(unexpected_terra_keys)}."
-                )
-                terra_index = {
-                    key: result
-                    for key, result in terra_index.items()
-                    if key in disagreement_keys
-                }
+                if reconciliation_error is not None:
+                    terra_stage_errors.append(reconciliation_error)
+                terra_failed_keys = disagreement_keys - set(terra_index)
+
+            terra_stage_error = (
+                terra_stage_errors[-1] if terra_stage_errors else None
+            )
             terra_failed_keys = disagreement_keys - set(terra_index)
             if terra_failed_keys:
-                terra_stage_error = terra_stage_error or ValueError(
-                    f"{senior_label} did not return every disputed cascade "
-                    "requirement key."
+                terra_stage_error = (
+                    terra_stage_error
+                    or AnalysisResponseError(
+                        f"{senior_label} did not return every disputed cascade "
+                        "requirement key."
+                    )
                 )
-
-            if terra_failed_keys:
+                terra_failure_detail = _cascade_failure_detail(
+                    terra_stage_error
+                )
                 if status_callback:
                     status_callback(
                         "warning",
                         f"{senior_label} review did not complete for "
                         f"{len(terra_failed_keys)} disputed requirement(s). "
                         "Successful adjudications are retained; only missing "
-                        "adjudications are provisional.",
+                        "adjudications are provisional. "
+                        f"{terra_failure_detail['message']}",
                     )
         elif status_callback:
-            status_callback(
-                "info",
-                f"{analyst_label} and {reviewer_label} agree on every "
-                f"classification; {senior_label} was not called.",
-            )
+            if luna_failed_keys:
+                completed_reviews = len(luna_index)
+                status_callback(
+                    "warning",
+                    f"{senior_label} was not called because there were no "
+                    "completed analyst/reviewer disagreements. "
+                    f"{completed_reviews} reviewer verdict(s) completed and "
+                    f"{len(luna_failed_keys)} remain provisional; full "
+                    "agreement was not established.",
+                )
+            else:
+                status_callback(
+                    "info",
+                    f"{analyst_label} and {reviewer_label} agree on every "
+                    f"classification; {senior_label} was not called.",
+                )
 
         confidence_rank = {"low": 0, "medium": 1, "high": 2}
         framework_order = {
@@ -2392,6 +2899,11 @@ def analyze_report_with_review_cascade(
                     reviewer_label=reviewer_label,
                     senior_label=senior_label,
                 )
+                if luna_failure_detail is not None:
+                    final_result["confidence_reason"] = (
+                        f"{final_result['confidence_reason']} "
+                        f"{luna_failure_detail['message']}"
+                    )
                 models_consulted = [analyst_model_id]
                 needs_human_review = True
                 verdicts = {
@@ -2405,6 +2917,11 @@ def analyze_report_with_review_cascade(
                         "models_consulted": models_consulted,
                         "model_verdicts": verdicts,
                         "role_models": dict(role_models),
+                        "cascade_failure_category": (
+                            luna_failure_detail["category"]
+                            if luna_failure_detail is not None
+                            else "incomplete_requirements"
+                        ),
                     }
                 )
                 final_results.append(final_result)
@@ -2447,6 +2964,11 @@ def analyze_report_with_review_cascade(
                     senior_label=senior_label,
                     reviewer_result=luna_result,
                 )
+                if terra_failure_detail is not None:
+                    final_result["confidence_reason"] = (
+                        f"{final_result['confidence_reason']} "
+                        f"{terra_failure_detail['message']}"
+                    )
                 models_consulted = [analyst_model_id, reviewer_model_id]
                 needs_human_review = True
             else:
@@ -2493,6 +3015,13 @@ def analyze_report_with_review_cascade(
                     "role_models": dict(role_models),
                 }
             )
+            if (
+                cascade_status == "senior_reviewer_failed"
+                and terra_failure_detail is not None
+            ):
+                final_result["cascade_failure_category"] = (
+                    terra_failure_detail["category"]
+                )
             final_results.append(final_result)
 
         summaries = _summarise_cascade_results(
@@ -2513,6 +3042,19 @@ def analyze_report_with_review_cascade(
             failure_stages.append("reviewer")
         if terra_failed_keys:
             failure_stages.append("senior_reviewer")
+        failure_details: dict[str, dict[str, Any]] = {}
+        if luna_failed_keys and luna_failure_detail is not None:
+            failure_details["reviewer"] = {
+                **luna_failure_detail,
+                "missing_requirements": len(luna_failed_keys),
+                "retry_count": luna_retry_count,
+            }
+        if terra_failed_keys and terra_failure_detail is not None:
+            failure_details["senior_reviewer"] = {
+                **terra_failure_detail,
+                "missing_requirements": len(terra_failed_keys),
+                "retry_count": terra_retry_count,
+            }
         usage.update(
             {
                 "cascade_complete": not failure_stages,
@@ -2520,6 +3062,7 @@ def analyze_report_with_review_cascade(
                     failure_stages[0] if failure_stages else None
                 ),
                 "cascade_failure_stages": failure_stages,
+                "cascade_failure_details": failure_details,
                 "role_models": dict(role_models),
             }
         )
