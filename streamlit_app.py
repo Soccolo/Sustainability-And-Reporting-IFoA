@@ -30,6 +30,9 @@ import report_drafter
 from startup_compat import import_module_with_exports
 
 _ANALYSIS_CORE_EXPORTS = (
+    # Revision-specific marker: a cached pre-PR11 analysis module has all the
+    # ordinary exports below, so this unique name triggers a one-time reload.
+    "ANALYSIS_CORE_REVISION_20260725_RELIABLE_REVIEW",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "HAIKU_MODEL",
@@ -2252,7 +2255,8 @@ def main():
                     key="cascade_senior_reviewer_model_id",
                     help=(
                         "Called only when analyst and reviewer classifications "
-                        "differ. The reviewer model is excluded."
+                        "differ. It does not replace a reviewer that returned "
+                        "no verdict. The reviewer model is excluded."
                     ),
                 )
                 selected_model_id = analyst_model_id
@@ -2274,9 +2278,10 @@ def main():
                     "**Reviewed cascade is slower and costlier.** "
                     f"{analyst_label} and {reviewer_label} run for every "
                     f"requirement. {senior_label} is charged only when their "
-                    "classifications disagree. The same model cannot occupy "
-                    "adjacent roles. Sequential review uses standard API "
-                    "pricing."
+                    "classifications disagree. If the reviewer returns no "
+                    "verdict, that item is provisional and the senior reviewer "
+                    "is not called. The same model cannot occupy adjacent "
+                    "roles. Sequential review uses standard API pricing."
                 )
                 st.markdown("**Required credentials**")
                 if "anthropic" in required_cascade_providers:
