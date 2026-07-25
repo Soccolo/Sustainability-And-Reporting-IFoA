@@ -141,20 +141,59 @@ class FakeOpenAIClient:
         self.responses = SimpleNamespace(create=create)
 
 
+class FakeAnthropicMessageStream:
+    """Small SDK-shaped stream manager that returns one accumulated Message."""
+
+    def __init__(self, response):
+        self.response = response
+        self.entered = False
+        self.closed = False
+        self.get_final_message_calls = 0
+
+    def __enter__(self):
+        self.entered = True
+        if isinstance(self.response, BaseException):
+            raise self.response
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.closed = True
+        return False
+
+    def get_final_message(self):
+        if not self.entered:
+            raise AssertionError("Anthropic stream must be entered first")
+        self.get_final_message_calls += 1
+        return self.response
+
+
 class SequencedAnthropicClient:
     def __init__(self, responses):
         self._responses = list(responses)
         self.calls = []
-        self.messages = SimpleNamespace(create=self.create)
+        self.create_calls = []
+        self.transports = []
+        self.streams = []
+        self.messages = SimpleNamespace(
+            create=self.create,
+            stream=self.stream,
+        )
 
     def create(self, **params):
+        self.create_calls.append(params)
+        raise AssertionError(
+            "Direct Anthropic requests must use messages.stream"
+        )
+
+    def stream(self, **params):
         self.calls.append(params)
+        self.transports.append("stream")
         if not self._responses:
             raise AssertionError("Unexpected extra Anthropic request")
         response = self._responses.pop(0)
-        if isinstance(response, BaseException):
-            raise response
-        return response
+        stream = FakeAnthropicMessageStream(response)
+        self.streams.append(stream)
+        return stream
 
 
 class SequencedOpenAIClient:
@@ -567,6 +606,20 @@ class AnalysisCoreTests(unittest.TestCase):
                 analysis_core.OPUS_MODEL,
             ],
         )
+        self.assertEqual(anthropic_client.create_calls, [])
+        self.assertEqual(
+            anthropic_client.transports,
+            ["stream", "stream", "stream"],
+        )
+        self.assertTrue(
+            all(stream.closed for stream in anthropic_client.streams)
+        )
+        self.assertTrue(
+            all(
+                stream.get_final_message_calls == 1
+                for stream in anthropic_client.streams
+            )
+        )
         self.assertNotIn("thinking", anthropic_client.calls[0])
         self.assertEqual(
             anthropic_client.calls[1]["thinking"], {"type": "adaptive"}
@@ -951,6 +1004,151 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(
             [call["model"] for call in client.calls],
             [analysis_core.OPUS_MODEL, analysis_core.OPUS_MODEL],
+        )
+        self.assertEqual(client.create_calls, [])
+        self.assertEqual(client.transports, ["stream", "stream"])
+        self.assertTrue(client.streams[1].closed)
+
+    def test_anthropic_stream_rate_limit_retry_is_bounded(self):
+        rate_limit_error = type("RateLimitError", (Exception,), {})
+        expected_message = message_for([], wrapped=True)
+        client = SequencedAnthropicClient(
+            [rate_limit_error("slow down"), expected_message]
+        )
+        params = {
+            "model": analysis_core.SONNET_MODEL,
+            "max_tokens": 64_000,
+            "messages": [],
+        }
+
+        with (
+            patch.object(
+                analysis_core,
+                "anthropic",
+                SimpleNamespace(RateLimitError=rate_limit_error),
+            ),
+            patch.object(analysis_core.time, "sleep") as sleep,
+        ):
+            message = analysis_core._anthropic_sync_request(
+                client,
+                params,
+                max_attempts=2,
+            )
+
+        self.assertIs(message, expected_message)
+        self.assertEqual(client.create_calls, [])
+        self.assertEqual(client.transports, ["stream", "stream"])
+        self.assertEqual(len(client.calls), 2)
+        sleep.assert_called_once_with(1)
+        self.assertTrue(client.streams[0].entered)
+        self.assertTrue(client.streams[1].closed)
+        self.assertEqual(client.streams[1].get_final_message_calls, 1)
+
+    def test_exhausted_stream_overload_is_safe_and_recoverable(self):
+        overloaded_error = type(
+            "StreamOverload",
+            (Exception,),
+            {"status_code": 200},
+        )
+        client = SequencedAnthropicClient(
+            [
+                overloaded_error("overloaded_error"),
+                overloaded_error("overloaded_error"),
+            ]
+        )
+
+        with (
+            patch.object(analysis_core.time, "sleep") as sleep,
+            self.assertRaises(
+                analysis_core.AnalysisProviderStreamError
+            ) as raised,
+        ):
+            analysis_core._anthropic_sync_request(
+                client,
+                {
+                    "model": analysis_core.SONNET_MODEL,
+                    "max_tokens": 64_000,
+                    "messages": [],
+                },
+                max_attempts=2,
+            )
+
+        self.assertEqual(client.create_calls, [])
+        self.assertEqual(client.transports, ["stream", "stream"])
+        sleep.assert_called_once_with(1)
+        self.assertTrue(
+            analysis_core._is_recoverable_cascade_stage_error(
+                raised.exception
+            )
+        )
+        self.assertEqual(
+            analysis_core._cascade_failure_detail(raised.exception)[
+                "category"
+            ],
+            "provider_service_error",
+        )
+
+    def test_streamed_final_message_ignores_thinking_and_counts_usage_once(self):
+        final_message = message_for(
+            [
+                cascade_item(
+                    "R0001",
+                    analysis_core.CLASSIFICATION_COVERS,
+                    "high",
+                    "The requirement is fully evidenced.",
+                )
+            ],
+            input_tokens=41,
+            output_tokens=9,
+        )
+        final_message.content.insert(
+            0,
+            SimpleNamespace(
+                type="thinking",
+                thinking="Private reasoning that is not response JSON.",
+            ),
+        )
+        client = SequencedAnthropicClient([final_message])
+
+        results, _, usage = analysis_core.analyze_report_with_claude(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            api_key="unused",
+            framework_requirements={
+                "FW A": {"governance": ["Canonical requirement"]}
+            },
+            framework_full_names={"FW A": "Framework A"},
+            use_batch=False,
+            client=client,
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["classification"],
+            analysis_core.CLASSIFICATION_COVERS,
+        )
+        self.assertEqual(client.create_calls, [])
+        self.assertEqual(client.transports, ["stream"])
+        self.assertTrue(client.streams[0].closed)
+        self.assertEqual(client.streams[0].get_final_message_calls, 1)
+        self.assertEqual(usage["input_tokens"], 41)
+        self.assertEqual(usage["output_tokens"], 9)
+        self.assertEqual(len(usage["usage_records"]), 1)
+
+    def test_anthropic_context_window_stop_is_treated_as_truncation(self):
+        message = message_for(
+            [],
+            stop_reason="model_context_window_exceeded",
+        )
+
+        with self.assertRaises(analysis_core.AnalysisResponseError) as raised:
+            analysis_core._parse_message(message)
+
+        self.assertEqual(
+            analysis_core._cascade_failure_detail(raised.exception)[
+                "category"
+            ],
+            "response_truncated",
         )
 
     def test_configurable_openai_only_cascade_needs_no_anthropic_key(self):
@@ -1496,23 +1694,29 @@ class AnalysisCoreTests(unittest.TestCase):
             ),
         )
         client = FakeClient([invalid_batch_result])
-        client.messages.create = lambda **params: message_for(
+        fallback_client = SequencedAnthropicClient(
             [
-                {
-                    "requirement_id": "R0001",
-                    "topic": "governance",
-                    "reference": "",
-                    "requirement": "A requirement",
-                    "classification": "Covers the framework",
-                    "confidence": "high",
-                    "confidence_reason": "Clear evidence.",
-                    "rationale": "Complete.",
-                    "relevant_extracts": ["[Page 1] Evidence"],
-                }
-            ],
-            input_tokens=30,
-            output_tokens=3,
+                message_for(
+                    [
+                        {
+                            "requirement_id": "R0001",
+                            "topic": "governance",
+                            "reference": "",
+                            "requirement": "A requirement",
+                            "classification": "Covers the framework",
+                            "confidence": "high",
+                            "confidence_reason": "Clear evidence.",
+                            "rationale": "Complete.",
+                            "relevant_extracts": ["[Page 1] Evidence"],
+                        }
+                    ],
+                    input_tokens=30,
+                    output_tokens=3,
+                )
+            ]
         )
+        client.messages.create = fallback_client.create
+        client.messages.stream = fallback_client.stream
 
         results, _, usage = analysis_core.analyze_report_with_claude(
             report_text="[Page 1] Evidence",
@@ -1532,6 +1736,9 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(usage["output_tokens"], 10)
         self.assertEqual(usage["batch_input_tokens"], 70)
         self.assertEqual(len(usage["usage_records"]), 2)
+        self.assertEqual(fallback_client.create_calls, [])
+        self.assertEqual(fallback_client.transports, ["stream"])
+        self.assertTrue(fallback_client.streams[0].closed)
 
     def test_review_cascade_agreement_skips_terra_and_includes_prior_rationale(self):
         haiku_client = SequencedAnthropicClient(

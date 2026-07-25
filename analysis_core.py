@@ -72,7 +72,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20260725_RELIABLE_REVIEW = True
+ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -88,6 +88,10 @@ _ASSESSMENT_ITEM_FIELDS = {
 
 class AnalysisResponseError(ValueError):
     """A recoverable model-response failure, distinct from input/config errors."""
+
+
+class AnalysisProviderStreamError(RuntimeError):
+    """A recoverable provider-stream failure after bounded retries."""
 
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
@@ -714,8 +718,9 @@ def _parse_message(
     *,
     wrapped: bool = False,
 ) -> list[dict[str, Any]]:
-    if _get(message, "stop_reason") == "max_tokens":
-        raise AnalysisResponseError("Response truncated (max_tokens reached)")
+    stop_reason = _get(message, "stop_reason")
+    if stop_reason in {"max_tokens", "model_context_window_exceeded"}:
+        raise AnalysisResponseError(f"Response truncated ({stop_reason})")
     if _get(message, "stop_reason") == "refusal":
         raise AnalysisResponseError(
             "Model refused the structured assessment request"
@@ -902,22 +907,68 @@ def _anthropic_sync_request(
     params: dict[str, Any],
     max_attempts: int = 3,
 ) -> Any:
-    """Retry transient rate limits without changing the user's chosen model."""
+    """Return a complete streamed Message with bounded transient retries."""
+
+    def transient_error_kind(error: Exception) -> str | None:
+        for error_name, kind in (
+            ("RateLimitError", "rate_limited"),
+            ("APIConnectionError", "connection_error"),
+            ("APITimeoutError", "timeout"),
+            ("InternalServerError", "provider_service_error"),
+        ):
+            error_type = (
+                getattr(anthropic, error_name, None)
+                if anthropic is not None
+                else None
+            )
+            if isinstance(error_type, type) and isinstance(error, error_type):
+                return kind
+
+        status_code = getattr(error, "status_code", None)
+        response = getattr(error, "response", None)
+        if status_code is None:
+            status_code = getattr(response, "status_code", None)
+        error_text = str(error).lower()
+        overloaded_stream = (
+            "overloaded_error" in error_text or "overloaded" in error_text
+        ) and (
+            status_code is None
+            or status_code == 200
+            or (isinstance(status_code, int) and status_code >= 500)
+        )
+        if (
+            isinstance(status_code, int) and status_code >= 500
+        ) or overloaded_stream:
+            return "provider_service_error"
+        return None
+
     def send(request_params: dict[str, Any]) -> Any:
         for attempt in range(max_attempts):
             try:
-                return client.messages.create(**request_params)
+                # Anthropic requires streaming for large Sonnet/Opus token
+                # ceilings. This helper accumulates SSE events into the same
+                # final Message shape consumed by parsing and usage accounting.
+                with client.messages.stream(**request_params) as stream:
+                    return stream.get_final_message()
             except Exception as error:
-                rate_limit_type = (
-                    getattr(anthropic, "RateLimitError", None)
-                    if anthropic is not None
-                    else None
-                )
-                if (
-                    rate_limit_type is None
-                    or not isinstance(error, rate_limit_type)
-                    or attempt + 1 >= max_attempts
-                ):
+                error_kind = transient_error_kind(error)
+                if error_kind is None:
+                    raise
+                if attempt + 1 >= max_attempts:
+                    if error_kind == "provider_service_error":
+                        internal_error_type = (
+                            getattr(anthropic, "InternalServerError", None)
+                            if anthropic is not None
+                            else None
+                        )
+                        if not (
+                            isinstance(internal_error_type, type)
+                            and isinstance(error, internal_error_type)
+                        ):
+                            raise AnalysisProviderStreamError(
+                                "The provider stream ended with a temporary "
+                                "service error."
+                            ) from error
                     raise
                 time.sleep(2**attempt)
         raise RuntimeError("Anthropic request retry loop ended unexpectedly")
@@ -2144,6 +2195,7 @@ def _aggregate_cascade_usage(
 def _is_recoverable_cascade_stage_error(error: Exception) -> bool:
     """Return whether a provider/reconciliation failure can yield partial results."""
     recoverable: list[type[BaseException]] = [
+        AnalysisProviderStreamError,
         AnalysisResponseError,
         json.JSONDecodeError,
         TimeoutError,
@@ -2197,6 +2249,13 @@ def _cascade_failure_detail(error: Exception | None) -> dict[str, str]:
             "category": "connection_error",
             "message": (
                 "The connection to the review model failed before completion."
+            ),
+        }
+    if isinstance(error, AnalysisProviderStreamError):
+        return {
+            "category": "provider_service_error",
+            "message": (
+                "The provider stream ended with a temporary service error."
             ),
         }
 
