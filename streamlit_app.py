@@ -1677,48 +1677,337 @@ def main():
             unsafe_allow_html=True,
         )
 
-        st.markdown("### What you can do")
-        feature_cols = st.columns(3)
+        # ══════════════════════════════════════════
+        # WALKTHROUGH / TUTORIAL
+        # ══════════════════════════════════════════
+
+        # ── 1. Which tab do you need? ──
+        st.markdown("### Which tab do you need?")
+        st.caption(
+            "Each tab stands on its own — you don't have to run them in "
+            "order. If you're new, start with the Report Analyser."
+        )
+
+        # (title, badge, badge_colour, what_it_does, when_to_use)
         feature_cards = [
             (
                 "Framework Map",
-                "Explore global adoption on the interactive globe and compare "
-                "similarity between frameworks across governance, strategy, "
-                "risk, metrics and disclosure.",
+                "No API key needed", "#1C6B4A",
+                "Explore which countries have adopted which frameworks, and "
+                "how closely any two frameworks overlap across governance, "
+                "strategy, risk, metrics and disclosure.",
+                "Use it to decide which frameworks are worth analysing "
+                "against — heavily overlapping ones tell you little extra.",
             ),
             (
                 "Report Analyser",
-                "Upload a PDF and have it assessed requirement-by-requirement. "
-                "Each one is classified as Covered, Partly covered or Not "
-                "covered, with rationale and extracts.",
+                "API key needed", "#C98A2B",
+                "Upload one PDF and have it assessed "
+                "requirement-by-requirement. Every requirement comes back as "
+                "Covered, Partly covered or Not covered, with a confidence "
+                "flag, a rationale, and the page-cited extracts from your "
+                "report it was based on.",
+                "Use it to find the gaps in a single report. This is the "
+                "main tool — start here.",
             ),
             (
                 "Side-by-Side Comparison",
-                "Benchmark two reports against each other — useful for "
-                "year-on-year progress or comparing two firms' disclosures.",
+                "API key needed", "#C98A2B",
+                "Runs that same assessment on two PDFs and shows, requirement "
+                "by requirement, which of the two covers it better.",
+                "Use it for year-on-year progress, or to benchmark yourself "
+                "against a peer's published report.",
+            ),
+            (
+                "Report Drafter (Beta)",
+                "API key needed", "#B4472F",
+                "Takes a report written for one framework and drafts the "
+                "equivalent disclosure for another (e.g. TCFD → TNFD). "
+                "Every paragraph cites the source pages it came from, and "
+                "anything your report can't support is flagged as a gap "
+                "rather than invented.",
+                "Use it for a first draft only. Every line needs human "
+                "review before it goes anywhere near a published report.",
             ),
         ]
-        for col, (card_title, card_body) in zip(feature_cols, feature_cards):
+        for row_start in (0, 2):
+            row_cols = st.columns(2)
+            for col, card in zip(row_cols, feature_cards[row_start:row_start + 2]):
+                c_title, c_badge, c_colour, c_does, c_when = card
+                with col:
+                    st.markdown(
+                        f'<div style="background:#FCFAF3;border:1px solid '
+                        f'#DDD5C2;border-radius:12px;padding:20px;'
+                        f'min-height:230px;margin-bottom:14px;">'
+                        f'<div style="display:flex;justify-content:space-between;'
+                        f'align-items:center;gap:10px;margin-bottom:10px;">'
+                        f'<span style="font-size:16px;font-weight:700;'
+                        f'color:#152018;">{c_title}</span>'
+                        f'<span style="font-size:10.5px;font-weight:600;'
+                        f'color:{c_colour};border:1px solid {c_colour}44;'
+                        f'border-radius:20px;padding:3px 9px;white-space:nowrap;">'
+                        f'{c_badge}</span></div>'
+                        f'<p style="margin:0 0 10px;font-size:13.5px;'
+                        f'line-height:1.55;color:#4B5A50;">{c_does}</p>'
+                        f'<p style="margin:0;font-size:13px;line-height:1.5;'
+                        f'color:#4B5A50;"><strong style="color:#152018;">'
+                        f'When to use it:</strong> {c_when}</p>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        # ── 2. Before you start ──
+        st.markdown("### Before you start")
+        st.markdown(
+            '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
+            'border-radius:12px;padding:18px 20px;margin-bottom:8px;">'
+            '<p style="margin:0 0 10px;font-size:13.5px;line-height:1.6;'
+            'color:#4B5A50;"><strong style="color:#152018;">An API key for '
+            'each provider you use</strong> — three of the four tabs send '
+            'text to a model. Claude models need an Anthropic key '
+            '(<a href="https://console.anthropic.com" target="_blank" '
+            'style="color:#1C6B4A;">console.anthropic.com</a>); GPT models '
+            'need an OpenAI key '
+            '(<a href="https://platform.openai.com" target="_blank" '
+            'style="color:#1C6B4A;">platform.openai.com</a>). The app only '
+            'asks for the keys the models you picked actually require. Keys '
+            'are used for that run and are never stored by this app, and '
+            'usage is billed directly to your own account.</p>'
+            '<p style="margin:0;font-size:13.5px;line-height:1.6;'
+            'color:#4B5A50;"><strong style="color:#152018;">A PDF of your '
+            'report</strong> — a sustainability report, transition plan '
+            'or the ESG section of an annual report. Scanned pages are fine: '
+            'vision is on by default and renders image-heavy pages so charts '
+            'and image-based tables can still count as evidence. You can also '
+            'paste text directly into the Report Analyser instead.</p>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── 3. Step-by-step walkthrough ──
+        st.markdown("### Walkthrough: analysing your first report")
+
+        # (title, body, what_to_pick)
+        walkthrough_steps = [
+            (
+                "Open the Report Analyser and choose an analysis strategy",
+                "This is the first control on the tab, and the one that most "
+                "changes what you get. **Single model** sends each "
+                "requirement to one model of your choice. **Reviewed "
+                "cascade** has a second model independently check every "
+                "verdict, and calls a third only where the first two "
+                "disagree — see “How the reviewed cascade works” below.",
+                "**Single model** for your first run and for routine work. "
+                "Switch to the cascade when a result is going to be relied "
+                "on and you want the disagreements surfaced — it is slower "
+                "and costs more.",
+            ),
+            (
+                "Pick the model, then paste the matching API key",
+                "In Single model mode you choose one of Claude Haiku 4.5, "
+                "GPT-5.6 Luna or GPT-5.6 Terra, and the app shows that "
+                "model's price per million tokens. In cascade mode you "
+                "choose all three roles instead. The key box that appears "
+                "matches whichever provider you selected.",
+                "Haiku 4.5 or Luna — both are the cheap tier and are the "
+                "right default. Terra costs roughly 2.5× more per input "
+                "token, so save it for a document you already know is hard.",
+            ),
+            (
+                "Choose the frameworks to assess against",
+                "Each tick adds one framework's full requirement list to the "
+                "run. The count of frameworks and total requirements updates "
+                "underneath, along with a rough time estimate.",
+                "Two or three frameworks that actually matter to you. The "
+                "default is TCFD and TNFD. “Select All” is for benchmarking "
+                "exercises — it costs more and produces a lot to read.",
+            ),
+            (
+                "Set the speed and cost options",
+                "**Batch API** is on by default in Single model mode: it is "
+                "50% cheaper but can take minutes to hours, and it isn't "
+                "available for the cascade. **Vision** is also on by "
+                "default and renders up to 30 dense or scanned pages as "
+                "images, which improves coverage of charts at the cost of "
+                "more processing time.",
+                "Turn Batch **off** for your first run so you get an "
+                "interactive result in a couple of minutes rather than "
+                "waiting. Leave Vision on unless your report is plain text "
+                "and you want the run to finish faster.",
+            ),
+            (
+                "Upload the PDF and set the page range",
+                "Once the file is loaded the app tells you how many pages it "
+                "found and lets you narrow the range. Only those pages are "
+                "read, and evidence is quoted back with the page number it "
+                "came from.",
+                "The sustainability section, not the whole annual report. "
+                "Trimming a 300-page filing to the relevant 40 pages is "
+                "faster, cheaper, and sharper — unrelated financial pages "
+                "only add noise.",
+            ),
+            (
+                "Click Analyse Report, then read the results",
+                "The button stays greyed out until you have a key, at least "
+                "one framework, and either a PDF or pasted text. You get a "
+                "coverage bar per framework, the detailed findings with "
+                "supporting extracts, a human-review queue, a gap analysis, "
+                "an Excel export, and a cost summary of what the run "
+                "actually charged.",
+                "Start with the human-review queue and the gap analysis — "
+                "between them they hold everything the app is either unsure "
+                "about or says you're missing. Then open the detailed "
+                "findings for any verdict you want to challenge and check "
+                "the page-cited extract behind it.",
+            ),
+        ]
+        import re
+
+        for step_no, (s_title, s_body, s_pick) in enumerate(
+            walkthrough_steps, start=1
+        ):
+            body_html = re.sub(
+                r"\*\*(.+?)\*\*",
+                r'<strong style="color:#152018;">\1</strong>',
+                s_body,
+            )
+            pick_html = re.sub(
+                r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s_pick
+            )
+            st.markdown(
+                f'<div style="display:flex;gap:16px;background:#FCFAF3;'
+                f'border:1px solid #DDD5C2;border-radius:12px;'
+                f'padding:18px 20px;margin-bottom:12px;">'
+                f'<div style="flex-shrink:0;width:30px;height:30px;'
+                f'border-radius:50%;background:#1C6B4A;color:#FCFAF3;'
+                f'display:flex;align-items:center;justify-content:center;'
+                f'font-weight:700;font-size:14px;">{step_no}</div>'
+                f'<div style="flex:1;">'
+                f'<p style="margin:0 0 6px;font-weight:700;font-size:15px;'
+                f'color:#152018;">{s_title}</p>'
+                f'<p style="margin:0 0 10px;font-size:13.5px;'
+                f'line-height:1.55;color:#4B5A50;">{body_html}</p>'
+                f'<p style="margin:0;font-size:13px;line-height:1.55;'
+                f'color:#1C6B4A;background:#E8F2EA;border-radius:7px;'
+                f'padding:9px 12px;"><strong>What to pick:</strong> '
+                f'{pick_html}</p></div></div>',
+                unsafe_allow_html=True,
+            )
+
+        # ── 4. Reading the verdicts ──
+        st.markdown("### What the three verdicts mean")
+        verdicts = [
+            ("Covered", "#1C6B4A",
+             "The report addresses the requirement with specific, "
+             "identifiable disclosure. The supporting extract and its page "
+             "number are shown."),
+            ("Partly covered", "#C98A2B",
+             "The topic is touched on but the disclosure is incomplete, "
+             "vague, or missing a component the requirement asks for. "
+             "These are usually the quickest wins."),
+            ("Not covered", "#B4472F",
+             "Nothing in the pages analysed addresses the requirement. "
+             "Check your page range before concluding it's a genuine gap."),
+        ]
+        v_cols = st.columns(3)
+        for col, (v_name, v_colour, v_body) in zip(v_cols, verdicts):
             with col:
                 st.markdown(
-                    f'<div style="background:#FCFAF3;border:1px solid #DDD5C2;'
-                    f'border-radius:12px;padding:20px;min-height:150px;">'
-                    f'<p style="margin:0 0 8px;font-size:16px;font-weight:700;'
-                    f'color:#152018;">{card_title}</p>'
-                    f'<p style="margin:0;font-size:13.5px;line-height:1.55;'
-                    f'color:#4B5A50;">{card_body}</p>'
-                    f'</div>',
+                    f'<div style="background:#FCFAF3;border:1px solid '
+                    f'#DDD5C2;border-left:4px solid {v_colour};'
+                    f'border-radius:10px;padding:16px 18px;min-height:160px;">'
+                    f'<p style="margin:0 0 8px;font-size:14.5px;'
+                    f'font-weight:700;color:{v_colour};">{v_name}</p>'
+                    f'<p style="margin:0;font-size:13px;line-height:1.55;'
+                    f'color:#4B5A50;">{v_body}</p></div>',
                     unsafe_allow_html=True,
                 )
-
-        st.markdown("### How to use the Report Analyser")
-        st.markdown(
-            "1. Go to the **Report Analyser** tab.\n"
-            "2. Select the frameworks you want to assess against.\n"
-            "3. Upload your PDF and optionally select a page range.\n"
-            "4. Click **Analyse Report** and wait for results.\n"
-            "5. Review the detailed analysis, gap analysis, and download the Excel export."
+        st.caption(
+            "Every verdict also carries a high / medium / low confidence "
+            "flag. Low-confidence verdicts are collected into a human-review "
+            "queue and marked in the Excel export, so the things the app is "
+            "least sure about are the easiest to find."
         )
+
+        # ── 5. The cascade / methodology ──
+        st.markdown("")
+        with st.expander(
+            "🔁  How the reviewed cascade works — \"is this AI checking "
+            "its own homework?\""
+        ):
+            st.markdown(
+                "Partly, and deliberately so — but only if you switch it on. "
+                "**Single model mode involves no AI review at all.** If you "
+                "choose the reviewed cascade, three roles run in sequence:"
+            )
+            st.markdown(
+                "**1. Analyst** — Haiku 4.5 or Luna reads your report and "
+                "gives every requirement a classification, evidence and a "
+                "confidence flag.\n\n"
+                "**2. Reviewer** — a *different* model (Luna, Haiku, Terra "
+                "or Sonnet 5) independently checks each of those verdicts, "
+                "including the evidence and reasoning behind them. The app "
+                "will not let the same model be both analyst and reviewer.\n\n"
+                "**3. Senior reviewer** — Terra, Sonnet 5, Opus 5 or Sol is "
+                "called **only** where the analyst and reviewer disagreed, "
+                "and adjudicates. You are only charged for it on those "
+                "items."
+            )
+            st.markdown(
+                "The point is that the disagreements become visible rather "
+                "than being smoothed over. Where all three land differently, "
+                "the requirement is flagged for human review and **excluded "
+                "from the coverage percentage** instead of being presented "
+                "as agreement. Every model's individual verdict is recorded, "
+                "so you can always see who said what and why."
+            )
+            st.info(
+                "This is cross-checking, not validation. Two models agreeing "
+                "makes an error less likely; it does not make the verdict "
+                "correct. The evidence extract is still the thing to check.",
+                icon="ℹ️",
+            )
+
+        with st.expander(
+            "ℹ️  Where the frameworks and similarity scores come from"
+        ):
+            st.markdown(
+                "Not everything in this app is AI-generated. The two "
+                "reference datasets are fixed inputs:"
+            )
+            st.markdown(
+                "**The requirement lists come from people.** The "
+                "requirements for every framework are maintained by the IFoA "
+                "Sustainability and Reporting Working Party in a spreadsheet "
+                "(`ReportingFrameworks.xlsx`) and read straight from that "
+                "file. No model writes or edits them.\n\n"
+                "**The framework similarity scores are precomputed and "
+                "deterministic.** The overlaps shown on the Framework Map "
+                "come from a fixed similarity table, so the same comparison "
+                "returns the same number every time.\n\n"
+                "A model is only involved in reading *your* report and "
+                "matching it against those human-authored requirements — and, "
+                "if you enable the cascade, in reviewing that matching."
+            )
+
+        with st.expander("⚠️  What this tool is not"):
+            st.markdown(
+                "- **Not an audit or assurance opinion.** It is an evidence-"
+                "retrieval and gap-spotting aid. A qualified human still has "
+                "to form the view.\n"
+                "- **Not a compliance guarantee.** A report scoring well here "
+                "can still fail a regulator's reading, and vice versa.\n"
+                "- **Only as good as the pages you gave it.** A “Not "
+                "covered” often means the disclosure sits outside your "
+                "selected page range.\n"
+                "- **Non-deterministic.** Re-running the same report can "
+                "produce different wording and the occasional different "
+                "borderline verdict. Always check the quoted extract before "
+                "acting on a finding.\n"
+                "- **Billed to you.** Every run charges your own API "
+                "account, and your report text is sent to the provider you "
+                "selected under their data-retention terms."
+            )
 
         st.markdown("---")
         st.markdown("### The Team")
