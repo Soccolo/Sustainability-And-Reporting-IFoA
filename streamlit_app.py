@@ -1388,7 +1388,12 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
         top=Side(style="thin"), bottom=Side(style="thin"),
     )
 
-    headers = ["Framework", "Topic", "Requirement", f"{name_a}", f"{name_b}", "Difference"]
+    headers = [
+        "Framework", "Topic", "Requirement",
+        f"{name_a}", f"{name_b}", "Difference", "Why",
+        f"{name_a} confidence", f"{name_a} rationale", f"{name_a} evidence",
+        f"{name_b} confidence", f"{name_b} rationale", f"{name_b} evidence",
+    ]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = header_font
@@ -1440,6 +1445,23 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
             ws.cell(row=row, column=5, value="N/A").border = thin_border
             ws.cell(row=row, column=6, value="—").border = thin_border
 
+        # Justification: why the two differ, then each side's own reasoning.
+        _, _, why = describe_comparison_delta(r_a, r_b, name_a, name_b)
+        ws.cell(row=row, column=7, value=why).border = thin_border
+        for offset, side in ((8, r_a), (11, r_b)):
+            ws.cell(
+                row=row, column=offset,
+                value=(side or {}).get("confidence", ""),
+            ).border = thin_border
+            ws.cell(
+                row=row, column=offset + 1,
+                value=(side or {}).get("rationale", ""),
+            ).border = thin_border
+            ws.cell(
+                row=row, column=offset + 2,
+                value="\n".join((side or {}).get("relevant_extracts", []) or []),
+            ).border = thin_border
+
         row += 1
 
     ws.column_dimensions["A"].width = 14
@@ -1448,11 +1470,167 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
     ws.column_dimensions["D"].width = 26
     ws.column_dimensions["E"].width = 26
     ws.column_dimensions["F"].width = 18
+    for letter in ("G", "I", "J", "L", "M"):
+        ws.column_dimensions[letter].width = 55
+    for letter in ("H", "K"):
+        ws.column_dimensions[letter].width = 12
+    # Long reasoning and evidence columns need wrapping to stay readable.
+    for excel_row in ws.iter_rows(min_row=2, max_row=row - 1, min_col=7, max_col=13):
+        for cell in excel_row:
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
 
     output = BytesIO()
     wb.save(output)
     output.seek(0)
     return output
+
+
+# ============================================
+# COMPARISON JUSTIFICATION HELPERS
+# ============================================
+
+# Short, plain-English readings of each verdict, used when explaining why one
+# report leads another. Singular form for "Report A <phrase>", plural for
+# "Both reports <phrase>".
+_CLASSIFICATION_PHRASE = {
+    CLASSIFICATION_COVERS: "addresses it with specific disclosure",
+    CLASSIFICATION_PARTLY: "addresses it only partly",
+    CLASSIFICATION_DOESNT: "does not address it",
+}
+_CLASSIFICATION_PHRASE_PLURAL = {
+    CLASSIFICATION_COVERS: "address it with specific disclosure",
+    CLASSIFICATION_PARTLY: "address it only partly",
+    CLASSIFICATION_DOESNT: "do not address it",
+}
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def describe_comparison_delta(r_a, r_b, name_a, name_b):
+    """Explain, from the recorded verdicts alone, which report leads and why.
+
+    Returns (headline, colour, detail). This is derived arithmetic over the two
+    classifications plus the evidence each side cited — no model is consulted,
+    so the explanation can never contradict the verdicts it describes.
+    """
+    class_a = r_a["classification"]
+    class_b = r_b["classification"] if r_b else CLASSIFICATION_DOESNT
+    score_a = classification_to_score(class_a)
+    score_b = classification_to_score(class_b)
+
+    n_a = len(r_a.get("relevant_extracts") or [])
+    n_b = len((r_b or {}).get("relevant_extracts") or [])
+    evidence = (
+        f"{name_a} cites {n_a} passage{'' if n_a == 1 else 's'}; "
+        f"{name_b} cites {n_b} passage{'' if n_b == 1 else 's'}."
+    )
+
+    if r_b is None:
+        return (
+            f"{name_a} only",
+            CLASSIFICATION_COLORS[CLASSIFICATION_PARTLY],
+            f"This requirement was not returned for {name_b}, so the two "
+            "cannot be compared here. It is not evidence of a gap.",
+        )
+
+    if score_a == score_b:
+        conf_a = str(r_a.get("confidence", ""))
+        conf_b = str(r_b.get("confidence", ""))
+        conf_note = ""
+        if conf_a != conf_b:
+            # Confidence is certainty in the verdict, not quality of coverage —
+            # say that explicitly so the two are not read as the same thing.
+            surer, less_sure = (
+                (name_a, name_b)
+                if _CONFIDENCE_RANK.get(conf_a, 0) > _CONFIDENCE_RANK.get(conf_b, 0)
+                else (name_b, name_a)
+            )
+            conf_note = (
+                f" The verdicts match, but the assessment was more certain for "
+                f"{surer} than for {less_sure} ({name_a}: {conf_a}, {name_b}: "
+                f"{conf_b}) — a difference in how clear-cut the call was, not in "
+                "how well either report covers the requirement."
+            )
+        return (
+            "Level",
+            "#8A9488",
+            f"Both reports "
+            f"{_CLASSIFICATION_PHRASE_PLURAL.get(class_a, 'were assessed the same')}."
+            f"{conf_note} {evidence}",
+        )
+
+    leader, laggard = (name_a, name_b) if score_a > score_b else (name_b, name_a)
+    lead_class, lag_class = (
+        (class_a, class_b) if score_a > score_b else (class_b, class_a)
+    )
+    margin = abs(score_a - score_b)
+    strength = "clearly ahead" if margin >= 1.0 else "ahead"
+    return (
+        f"{leader} {strength}",
+        CLASSIFICATION_COLORS[CLASSIFICATION_COVERS],
+        f"{leader} {_CLASSIFICATION_PHRASE.get(lead_class, 'scores higher')}, "
+        f"while {laggard} {_CLASSIFICATION_PHRASE.get(lag_class, 'scores lower')}. "
+        f"{evidence}",
+    )
+
+
+def build_comparison_side_html(result, label, colour_for_missing="#B4472F"):
+    """Render one report's verdict, evidence and reasoning for the comparison view."""
+    if result is None:
+        return (
+            f'<div style="flex:1;min-width:240px;">'
+            f'<span style="font-size:11px;color:#8A9488;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">{html.escape(label)}</span><br>'
+            f'<span class="badge-doesnt">Not returned</span>'
+            f'<p style="margin:8px 0 0 0;font-size:12px;color:{colour_for_missing};'
+            f'font-style:italic;">This requirement was not returned for this '
+            f'report, so no verdict or evidence is available.</p></div>'
+        )
+
+    classification = result.get("classification", CLASSIFICATION_DOESNT)
+    badge = CLASSIFICATION_BADGES.get(classification, "badge-doesnt")
+    clr = CLASSIFICATION_COLORS.get(classification, "#8A9488")
+
+    extracts = result.get("relevant_extracts") or []
+    if extracts:
+        extracts_html = "".join(
+            f'<div style="background:#F5F1E8;border-left:3px solid {clr};'
+            f'padding:6px 10px;margin:4px 0;border-radius:0 4px 4px 0;'
+            f'font-size:12px;color:#4B5A50;font-style:italic;">'
+            f'"{html.escape(str(ext))}"</div>'
+            for ext in extracts
+        )
+        evidence_section = (
+            '<p style="margin:8px 0 4px 0;font-size:11px;color:#8A9488;'
+            'text-transform:uppercase;letter-spacing:0.5px;">'
+            f'Evidence cited</p>{extracts_html}'
+        )
+    else:
+        evidence_section = (
+            '<p style="margin:8px 0 4px 0;font-size:12px;color:#B4472F;'
+            'font-style:italic;">No supporting text found in this report</p>'
+        )
+
+    confidence = html.escape(str(result.get("confidence", "")))
+    rationale = html.escape(str(result.get("rationale") or ""))
+    confidence_reason = html.escape(str(result.get("confidence_reason") or ""))
+
+    return (
+        f'<div style="flex:1;min-width:240px;">'
+        f'<span style="font-size:11px;color:#8A9488;text-transform:uppercase;'
+        f'letter-spacing:0.5px;">{html.escape(label)}</span><br>'
+        f'<span class="{badge}">{html.escape(str(classification))}</span>'
+        f'<span style="font-size:11px;color:#4B5A50;margin-left:8px;">'
+        f'confidence: <strong>{confidence}</strong></span>'
+        f'{evidence_section}'
+        f'<p style="margin:8px 0 0 0;font-size:12px;color:#152018;">'
+        f'<strong>Why this verdict:</strong> {rationale}</p>'
+        + (
+            f'<p style="margin:5px 0 0 0;font-size:11px;color:#4B5A50;">'
+            f'<strong>Confidence:</strong> {confidence_reason}</p>'
+            if confidence_reason else ""
+        )
+        + '</div>'
+    )
 
 
 # ============================================
@@ -4001,45 +4179,49 @@ def main():
                             )
                             r_b = b_lookup.get(key)
 
-                            class_a = r_a["classification"]
-                            class_b = (
-                                r_b["classification"]
-                                if r_b else CLASSIFICATION_DOESNT
-                            )
-                            badge_a = CLASSIFICATION_BADGES.get(
-                                class_a, "badge-doesnt"
-                            )
-                            badge_b = CLASSIFICATION_BADGES.get(
-                                class_b, "badge-doesnt"
-                            )
-
                             req_text = r_a["requirement"]
                             if len(req_text) > 180:
                                 req_text = req_text[:180] + "\u2026"
+                            req_text = html.escape(str(req_text))
+
+                            ref = r_a.get("reference", "")
+                            ref_html = (
+                                f'<span style="font-size:11px;color:#8A9488;'
+                                f'font-family:monospace;background:#DDD5C2;'
+                                f'padding:1px 6px;border-radius:4px;'
+                                f'margin-right:8px;">'
+                                f'{html.escape(str(ref))}</span>'
+                                if ref else ""
+                            )
+
+                            headline, head_clr, detail = (
+                                describe_comparison_delta(
+                                    r_a, r_b, name_a, name_b
+                                )
+                            )
 
                             st.markdown(
                                 f'<div style="background:#EDE7D8;'
-                                f'padding:12px;border-radius:8px;'
-                                f'margin:8px 0;">'
-                                f'<p style="margin:0 0 8px 0;'
+                                f'padding:14px;border-radius:8px;'
+                                f'margin:10px 0;">'
+                                f'<p style="margin:0 0 10px 0;'
                                 f'font-size:13px;color:#152018;">'
-                                f'{req_text}</p>'
-                                f'<div style="display:flex;gap:16px;'
-                                f'align-items:center;flex-wrap:wrap;">'
-                                f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#8A9488;'
-                                f'text-transform:uppercase;">'
-                                f'{name_a}</span><br>'
-                                f'<span class="{badge_a}">'
-                                f'{class_a}</span>'
+                                f'{ref_html}{req_text}</p>'
+                                f'<div style="background:#FCFAF3;'
+                                f'border-left:3px solid {head_clr};'
+                                f'border-radius:0 6px 6px 0;'
+                                f'padding:8px 12px;margin:0 0 12px 0;">'
+                                f'<span style="font-size:11px;'
+                                f'text-transform:uppercase;'
+                                f'letter-spacing:0.5px;font-weight:700;'
+                                f'color:{head_clr};">{html.escape(headline)}</span>'
+                                f'<p style="margin:4px 0 0 0;font-size:12px;'
+                                f'color:#4B5A50;">{html.escape(detail)}</p>'
                                 f'</div>'
-                                f'<div style="flex:1;min-width:200px;">'
-                                f'<span style="font-size:11px;color:#8A9488;'
-                                f'text-transform:uppercase;">'
-                                f'{name_b}</span><br>'
-                                f'<span class="{badge_b}">'
-                                f'{class_b}</span>'
-                                f'</div>'
+                                f'<div style="display:flex;gap:20px;'
+                                f'align-items:flex-start;flex-wrap:wrap;">'
+                                f'{build_comparison_side_html(r_a, name_a)}'
+                                f'{build_comparison_side_html(r_b, name_b)}'
                                 f'</div>'
                                 f'</div>',
                                 unsafe_allow_html=True
