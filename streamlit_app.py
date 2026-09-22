@@ -32,10 +32,13 @@ from startup_compat import import_module_with_exports
 _ANALYSIS_CORE_EXPORTS = (
     # Revision-specific marker: a cached older analysis module can have all the
     # ordinary exports below, so this unique name triggers a one-time reload.
-    "ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS",
+    "ANALYSIS_CORE_REVISION_20260922_CHECKLIST_VERDICTS",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "CACHED_PROMPT_TOKEN_ENERGY_RATIO",
+    "ELEMENT_EVIDENCED",
+    "ELEMENT_NOT_APPLICABLE",
+    "ELEMENT_NOT_EVIDENCED",
     "EMISSIONS_UNCERTAINTY_FACTOR",
     "FAST_MODE_ENERGY_MULTIPLIER",
     "FAST_SERVICE_TIERS",
@@ -53,11 +56,13 @@ _ANALYSIS_CORE_EXPORTS = (
     "USER_SELECTABLE_MODELS",
     "analyze_report",
     "analyze_report_with_review_cascade",
+    "checklist_summary",
     "estimate_usage_cost",
     "estimate_usage_emissions",
     "extract_pdf_pages",
     "format_report_text",
     "get_model_config",
+    "load_requirement_checklists",
     "model_energy_per_1k_output_wh",
     "model_picker_label",
     "requested_price_multiplier",
@@ -68,6 +73,9 @@ from analysis_core import (
     ANALYST_MODELS,
     AnalysisAuthenticationError,
     CACHED_PROMPT_TOKEN_ENERGY_RATIO,
+    ELEMENT_EVIDENCED,
+    ELEMENT_NOT_APPLICABLE,
+    ELEMENT_NOT_EVIDENCED,
     EMISSIONS_UNCERTAINTY_FACTOR,
     FAST_MODE_ENERGY_MULTIPLIER,
     FAST_SERVICE_TIERS,
@@ -85,11 +93,13 @@ from analysis_core import (
     USER_SELECTABLE_MODELS,
     analyze_report,
     analyze_report_with_review_cascade,
+    checklist_summary,
     estimate_usage_cost,
     estimate_usage_emissions,
     extract_pdf_pages,
     format_report_text,
     get_model_config,
+    load_requirement_checklists,
     model_energy_per_1k_output_wh,
     model_picker_label,
     requested_price_multiplier,
@@ -484,6 +494,19 @@ def load_similarity_data():
 # ============================================
 
 @st.cache_data
+def load_checklists():
+    """Load the guidance checklists that turn element marks into verdicts."""
+    import os
+
+    return load_requirement_checklists(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "requirement_checklists.csv",
+        )
+    )
+
+
+@st.cache_data
 def load_framework_requirements():
     """
     Load framework requirements from ReportingFrameworks_v1.xlsx.
@@ -599,6 +622,7 @@ def run_model_analysis(
     existing_batch_id=None,
     track_pending_batch=False,
     model_id=PRIMARY_MODEL,
+    requirement_elements=None,
 ):
     """Run the confidence-aware multimodal analysis pipeline."""
 
@@ -628,6 +652,7 @@ def run_model_analysis(
         progress_callback=update_progress,
         status_callback=show_status,
         model_id=model_id,
+        requirement_elements=requirement_elements,
     )
 
 
@@ -643,6 +668,7 @@ def run_review_cascade(
     analyst_model_id=HAIKU_MODEL,
     reviewer_model_id=LUNA_MODEL,
     senior_reviewer_model_id=SOL_MODEL,
+    requirement_elements=None,
 ):
     """Run the selected three-role review cascade using standard calls."""
 
@@ -667,6 +693,7 @@ def run_review_cascade(
         analyst_model_id=analyst_model_id,
         reviewer_model_id=reviewer_model_id,
         senior_reviewer_model_id=senior_reviewer_model_id,
+        requirement_elements=requirement_elements,
     )
 
 
@@ -929,6 +956,96 @@ def cascade_status_label(result):
     return CASCADE_STATUS_LABELS.get(status, str(status).replace("_", " ").title())
 
 
+ELEMENT_STATUS_DISPLAY = {
+    ELEMENT_EVIDENCED: ("✓", "Evidenced", "#1C6B4A"),
+    ELEMENT_NOT_EVIDENCED: ("✗", "Not evidenced", "#B4472F"),
+    ELEMENT_NOT_APPLICABLE: ("–", "Not applicable", "#8A9488"),
+}
+
+
+def vote_checklist_summary(result, vote):
+    """Summarise one cascade role's element marks for this requirement."""
+    # Role snapshots carry only marks, so take each element's
+    # "counts towards Covers" flag from the final result.
+    counts = {
+        finding.get("element_id"): finding.get("counts_towards_covers", True)
+        for finding in result.get("element_findings") or []
+    }
+    return checklist_summary(
+        {
+            **finding,
+            "counts_towards_covers": counts.get(
+                finding.get("element_id"), True
+            ),
+        }
+        for finding in vote.get("element_findings") or []
+        if isinstance(finding, dict)
+    )
+
+
+def build_checklist_html(result, max_element_chars=220):
+    """Return the guidance checklist behind a verdict as escaped HTML."""
+    findings = result.get("element_findings") or []
+    if not findings:
+        return ""
+    rows = []
+    for finding in findings:
+        icon, label, colour = ELEMENT_STATUS_DISPLAY.get(
+            finding.get("status"), ELEMENT_STATUS_DISPLAY[ELEMENT_NOT_EVIDENCED]
+        )
+        element = str(finding.get("element") or "")
+        if len(element) > max_element_chars:
+            element = element[:max_element_chars].rstrip() + "…"
+        optional = (
+            " (optional)" if not finding.get("counts_towards_covers", True) else ""
+        )
+        evidence = str(finding.get("evidence") or "")
+        rows.append(
+            f'<div style="font-size:11.5px;color:#3B4A40;margin:3px 0;">'
+            f'<span style="color:{colour};font-weight:700;" '
+            f'title="{label}">{icon} {label}</span> · '
+            f"{html.escape(str(finding.get('element_id', '')))}{optional}: "
+            f"{html.escape(element)}"
+            + (
+                f'<br><span style="font-style:italic;color:#6E796F;">'
+                f'"{html.escape(evidence)}"</span>'
+                if evidence
+                else ""
+            )
+            + "</div>"
+        )
+    summary = result.get("checklist_summary") or checklist_summary(findings)
+    return (
+        '<p style="margin:8px 0 4px 0;font-size:11px;color:#8A9488;'
+        'text-transform:uppercase;letter-spacing:0.5px;">'
+        f"Guidance checklist — {html.escape(summary)}</p>"
+        + "".join(rows)
+    )
+
+
+def checklist_export_text(result):
+    """Return the guidance checklist behind a verdict as plain text."""
+    findings = result.get("element_findings") or []
+    if not findings:
+        return ""
+    lines = [result.get("checklist_summary") or checklist_summary(findings)]
+    for finding in findings:
+        _, label, _ = ELEMENT_STATUS_DISPLAY.get(
+            finding.get("status"), ELEMENT_STATUS_DISPLAY[ELEMENT_NOT_EVIDENCED]
+        )
+        optional = (
+            " (optional)" if not finding.get("counts_towards_covers", True) else ""
+        )
+        line = (
+            f"{finding.get('element_id', '')}{optional} {label}: "
+            f"{finding.get('element', '')}"
+        )
+        if finding.get("evidence"):
+            line += f" | Evidence: {finding['evidence']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def build_cascade_review_html(result):
     """Return escaped badge and compact audit trail for a cascade result."""
     if not is_review_cascade_result(result):
@@ -1008,10 +1125,12 @@ def build_cascade_review_html(result):
         evidence = "<br>".join(
             html.escape(str(extract)) for extract in extracts
         )
+        tally = html.escape(vote_checklist_summary(result, vote))
         vote_rows.append(
             '<div style="font-size:11px;color:#3B4A40;margin-top:5px;">'
             f"<strong>{html.escape(display_name)}:</strong> {verdict}"
             f"{f' · {confidence} confidence' if confidence else ''}"
+            f"{f' · checklist: {tally}' if tally else ''}"
             f"{f'<br><strong>Confidence reason:</strong> {confidence_reason}' if confidence_reason else ''}"
             f"{f'<br><strong>Rationale:</strong> {rationale}' if rationale else ''}"
             f"{f'<br><strong>Evidence:</strong><br>{evidence}' if evidence else ''}"
@@ -1206,6 +1325,7 @@ def generate_results_excel(results, framework_summaries):
         "Senior Reviewer Model and Verdict", "Senior Reviewer Confidence",
         "Senior Reviewer Review Detail",
         "Confidence", "Confidence Reason", "Rationale", "Relevant Extracts",
+        "Guidance Checklist",
     ]
     for col, h in enumerate(detail_headers, 1):
         cell = ws_detail.cell(row=1, column=col, value=h)
@@ -1274,6 +1394,7 @@ def generate_results_excel(results, framework_summaries):
             result.get("confidence_reason", ""),
             result.get("rationale", ""),
             "; ".join(result.get("relevant_extracts", [])),
+            checklist_export_text(result),
         ]
         for column, value in enumerate(values, 1):
             cell = worksheet.cell(
@@ -1282,7 +1403,7 @@ def generate_results_excel(results, framework_summaries):
                 value=safe_excel_value(value),
             )
             cell.border = thin_border
-            if column in {4, 10, 13, 16, 18, 19, 20}:
+            if column in {4, 10, 13, 16, 18, 19, 20, 21}:
                 cell.alignment = Alignment(wrap_text=True, vertical="top")
 
         class_cell = worksheet.cell(row=row_number, column=5)
@@ -1322,7 +1443,7 @@ def generate_results_excel(results, framework_summaries):
         "A": 14, "B": 18, "C": 18, "D": 50, "E": 26,
         "F": 24, "G": 20, "H": 26, "I": 16, "J": 45,
         "K": 26, "L": 16, "M": 45, "N": 26, "O": 16,
-        "P": 45, "Q": 15, "R": 40, "S": 50, "T": 50,
+        "P": 45, "Q": 15, "R": 40, "S": 50, "T": 50, "U": 70,
     }
     for col_letter, width in column_widths.items():
         ws_detail.column_dimensions[col_letter].width = width
@@ -1526,6 +1647,7 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
         f"{name_a}", f"{name_b}", "Difference", "Why",
         f"{name_a} confidence", f"{name_a} rationale", f"{name_a} evidence",
         f"{name_b} confidence", f"{name_b} rationale", f"{name_b} evidence",
+        f"{name_a} guidance checklist", f"{name_b} guidance checklist",
     ]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -1594,6 +1716,11 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
                 row=row, column=offset + 2,
                 value="\n".join((side or {}).get("relevant_extracts", []) or []),
             ).border = thin_border
+        for column, side in ((14, r_a), (15, r_b)):
+            ws.cell(
+                row=row, column=column,
+                value=checklist_export_text(side or {}),
+            ).border = thin_border
 
         row += 1
 
@@ -1603,12 +1730,12 @@ def generate_comparison_excel(results_a, results_b, name_a, name_b, common_frame
     ws.column_dimensions["D"].width = 26
     ws.column_dimensions["E"].width = 26
     ws.column_dimensions["F"].width = 18
-    for letter in ("G", "I", "J", "L", "M"):
+    for letter in ("G", "I", "J", "L", "M", "N", "O"):
         ws.column_dimensions[letter].width = 55
     for letter in ("H", "K"):
         ws.column_dimensions[letter].width = 12
     # Long reasoning and evidence columns need wrapping to stay readable.
-    for excel_row in ws.iter_rows(min_row=2, max_row=row - 1, min_col=7, max_col=13):
+    for excel_row in ws.iter_rows(min_row=2, max_row=row - 1, min_col=7, max_col=15):
         for cell in excel_row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
 
@@ -1755,6 +1882,7 @@ def build_comparison_side_html(result, label, colour_for_missing="#B4472F"):
         f'<span style="font-size:11px;color:#4B5A50;margin-left:8px;">'
         f'confidence: <strong>{confidence}</strong></span>'
         f'{evidence_section}'
+        f'{build_checklist_html(result)}'
         f'<p style="margin:8px 0 0 0;font-size:12px;color:#152018;">'
         f'<strong>Why this verdict:</strong> {rationale}</p>'
         + (
@@ -1910,6 +2038,14 @@ def main():
 
     # Load requirements + source references from Excel once
     framework_requirements, requirement_refs = load_framework_requirements()
+    try:
+        requirement_checklists = load_checklists()
+    except ValueError as error:
+        st.warning(
+            "The guidance checklists could not be read, so verdicts use "
+            f"each model's overall judgement: {error}"
+        )
+        requirement_checklists = {}
 
     # Load similarity CSVs
     similarity_data = load_similarity_data()
@@ -2239,6 +2375,15 @@ def main():
             "flag. Low-confidence verdicts are collected into a human-review "
             "queue and marked in the Excel export, so the things the app is "
             "least sure about are the easiest to find."
+        )
+        st.caption(
+            "For TCFD, TNFD, OSFI, TPT and ESRS E1, the verdict follows a "
+            "fixed checklist drawn from each framework's own guidance. The "
+            "AI marks each expected element as evidenced, not evidenced or not "
+            "applicable, and the app then decides: every expected element "
+            "evidenced is Covered, some is Partly covered, none is Not "
+            "covered. This keeps the same report getting the same verdict, "
+            "and the checklist is shown under each finding."
         )
 
         # ── 5. The cascade / methodology ──
@@ -3159,6 +3304,11 @@ def main():
                         existing_batch_id=pending_batch_id,
                         track_pending_batch=True,
                         model_id=pending_model_id,
+                        requirement_elements=(
+                            requirement_checklists
+                            if pending_analysis.get("use_checklists")
+                            else None
+                        ),
                     )
                 )
                 st.session_state.analysis_results = results
@@ -3301,6 +3451,7 @@ def main():
                         "report_pages": report_pages,
                         "selected_frameworks": list(selected_frameworks),
                         "num_pages": len(report_pages),
+                        "use_checklists": True,
                     }
 
                 try:
@@ -3320,6 +3471,7 @@ def main():
                                 senior_reviewer_model_id=(
                                     senior_reviewer_model_id
                                 ),
+                                requirement_elements=requirement_checklists,
                             )
                         )
                     else:
@@ -3332,6 +3484,7 @@ def main():
                                 use_batch=use_batch_api,
                                 track_pending_batch=use_batch_api,
                                 model_id=selected_model_id,
+                                requirement_elements=requirement_checklists,
                             )
                         )
                     st.session_state.analysis_results = results
@@ -3791,12 +3944,18 @@ def main():
                                 or "The model did not provide a clear "
                                 "confidence reason."
                             )
+                        checklist_note = (
+                            f"  \n*Checklist:* {result['checklist_summary']}"
+                            if result.get("checklist_summary")
+                            else ""
+                        )
                         st.markdown(
                             f"**{result['framework']} · "
                             f"{prettify_topic_name(result['topic'])} — "
                             f"{result['classification']}**  \n"
                             f"{result.get('requirement', '')}  \n"
                             f"*Why review:* {'; '.join(review_details)}"
+                            f"{checklist_note}"
                         )
                         _, audit_trail = build_cascade_review_html(result)
                         if audit_trail:
@@ -3972,6 +4131,7 @@ def main():
                                 f'{cascade_badge_html}'
                                 f'</div>'
                                 f'{extracts_section}'
+                                f'{build_checklist_html(r)}'
                                 f'<p style="margin:8px 0 0 0;'
                                 f'font-size:12px;color:#152018;">'
                                 f'<strong>Rationale:</strong> '
@@ -4184,6 +4344,7 @@ def main():
                             report_pages=pages_a,
                             use_batch=False,
                             model_id=cmp_model_id,
+                            requirement_elements=requirement_checklists,
                         )
                     )
                 except AnalysisAuthenticationError as e:
@@ -4204,6 +4365,7 @@ def main():
                             report_pages=pages_b,
                             use_batch=False,
                             model_id=cmp_model_id,
+                            requirement_elements=requirement_checklists,
                         )
                     )
                 except AnalysisAuthenticationError as e:

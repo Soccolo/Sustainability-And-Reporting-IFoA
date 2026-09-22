@@ -73,7 +73,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS = True
+ANALYSIS_CORE_REVISION_20260922_CHECKLIST_VERDICTS = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -84,7 +84,17 @@ _ASSESSMENT_ITEM_FIELDS = {
     "confidence",
     "confidence_reason",
     "rationale",
+    "element_findings",
 }
+# Each checklist element is marked with one of these statuses.
+ELEMENT_EVIDENCED = "evidenced"
+ELEMENT_NOT_EVIDENCED = "not evidenced"
+ELEMENT_NOT_APPLICABLE = "not applicable"
+ELEMENT_STATUSES = [
+    ELEMENT_EVIDENCED,
+    ELEMENT_NOT_EVIDENCED,
+    ELEMENT_NOT_APPLICABLE,
+]
 
 
 class AnalysisResponseError(ValueError):
@@ -135,6 +145,11 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "batch_output_price": 2.5,
         "description": "Fast, low-cost Claude model",
         "secret_name": "ANTHROPIC_API_KEY",
+        # Sampling at the default temperature of 1.0 made verdicts vary between
+        # runs. Haiku runs without extended thinking, so the API accepts 0.
+        "temperature": 0.0,
+        # Room for per-element checklist evidence across a whole framework.
+        "review_max_tokens": 32_768,
         "active_parameters_b": (10, 35),
         "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
     },
@@ -584,6 +599,19 @@ def _assessment_result_schema() -> dict[str, Any]:
         },
         "confidence_reason": {"type": "string"},
         "rationale": {"type": "string"},
+        "element_findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "element_id": {"type": "string"},
+                    "status": {"type": "string", "enum": ELEMENT_STATUSES},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["element_id", "status", "evidence"],
+                "additionalProperties": False,
+            },
+        },
     }
     return {
         "type": "object",
@@ -645,6 +673,129 @@ def normalise_confidence(value: Any) -> str:
     if raw in {"moderate", "mid"}:
         return "medium"
     return "low"
+
+
+def requirement_key(framework: str, requirement: str) -> tuple[str, str]:
+    """Identify a requirement regardless of line breaks or spacing."""
+    return (" ".join(str(framework).split()), " ".join(str(requirement).split()))
+
+
+def load_requirement_checklists(
+    path: Any,
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Read requirement_checklists.csv into checklist elements per requirement.
+
+    A missing file means no checklists, so every verdict uses the model's
+    overall judgement. Duplicate element IDs within a requirement are an
+    editing error and are rejected rather than silently dropped.
+    """
+    import csv
+    from pathlib import Path
+
+    checklist_path = Path(path)
+    if not checklist_path.exists():
+        return {}
+    checklists: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    with checklist_path.open(newline="", encoding="utf-8-sig") as handle:
+        for row in csv.DictReader(handle):
+            element_id = " ".join(str(row.get("Element ID") or "").split())
+            element = " ".join(str(row.get("Element") or "").split())
+            if not element_id or not element:
+                continue
+            key = requirement_key(
+                row.get("Framework", ""), row.get("Requirement", "")
+            )
+            elements = checklists.setdefault(key, [])
+            if any(item["element_id"] == element_id for item in elements):
+                raise ValueError(
+                    f"Duplicate checklist element {element_id} for "
+                    f"{key[0]}: {key[1][:80]}"
+                )
+            counts = str(row.get("Counts towards Covers") or "Yes")
+            elements.append(
+                {
+                    "element_id": element_id,
+                    "element": element,
+                    "counts_towards_covers": counts.strip().lower() != "no",
+                }
+            )
+    return checklists
+
+
+def normalise_element_status(value: Any) -> str | None:
+    """Return a checklist status, or None when the value is unrecognised."""
+    raw = " ".join(str(value or "").replace("_", " ").split()).lower()
+    if raw in {ELEMENT_EVIDENCED, "yes", "true"}:
+        return ELEMENT_EVIDENCED
+    if raw in {ELEMENT_NOT_EVIDENCED, "no", "false"}:
+        return ELEMENT_NOT_EVIDENCED
+    if raw in {ELEMENT_NOT_APPLICABLE, "n/a", "na"}:
+        return ELEMENT_NOT_APPLICABLE
+    return None
+
+
+def classify_from_checklist(findings: Iterable[dict[str, Any]]) -> str | None:
+    """Derive a classification from element marks with a fixed rule.
+
+    Elements that do not apply are ignored. Covers needs every applicable
+    element that counts towards Covers to be evidenced; Partly means some
+    element is evidenced; Doesn't cover means none is. When only optional
+    elements apply they are alternatives, so any one of them is enough. Returns
+    None when no element applies, so the model's overall judgement stands.
+    """
+    applicable = [
+        finding for finding in findings
+        if finding.get("status") != ELEMENT_NOT_APPLICABLE
+    ]
+    if not applicable:
+        return None
+    any_evidenced = any(
+        finding.get("status") == ELEMENT_EVIDENCED for finding in applicable
+    )
+    required = [
+        finding for finding in applicable
+        if finding.get("counts_towards_covers", True)
+    ]
+    if not required:
+        return CLASSIFICATION_COVERS if any_evidenced else CLASSIFICATION_DOESNT
+    if all(finding.get("status") == ELEMENT_EVIDENCED for finding in required):
+        return CLASSIFICATION_COVERS
+    return CLASSIFICATION_PARTLY if any_evidenced else CLASSIFICATION_DOESNT
+
+
+def checklist_summary(findings: Iterable[dict[str, Any]]) -> str:
+    """Describe element marks in one line, e.g. '2 of 3 elements evidenced'."""
+    findings = list(findings)
+    if not findings:
+        return ""
+    applicable = [
+        finding for finding in findings
+        if finding.get("status") != ELEMENT_NOT_APPLICABLE
+    ]
+    if not applicable:
+        return "No checklist element applies"
+    required = [
+        finding for finding in applicable
+        if finding.get("counts_towards_covers", True)
+    ]
+    counted = required or applicable
+    evidenced = sum(
+        finding.get("status") == ELEMENT_EVIDENCED for finding in counted
+    )
+    if not required:
+        noun = "optional element"
+    elif len(required) < len(applicable):
+        noun = "required element"
+    else:
+        noun = "element"
+    plural = "" if len(counted) == 1 else "s"
+    summary = f"{evidenced} of {len(counted)} {noun}{plural} evidenced"
+    if not required:
+        summary += " (any one is enough)"
+    not_applicable = len(findings) - len(applicable)
+    if not_applicable:
+        summary += f"; {not_applicable} not applicable"
+    return summary
 
 
 def estimate_usage_cost(
@@ -758,7 +909,8 @@ def _system_prompt_text(report_text: str) -> str:
         "Use exactly one classification: 'Covers the framework' for comprehensive, "
         "specific evidence; 'Partly covers the framework' for incomplete, vague, or "
         "borderline evidence; or \"Doesn't cover the framework\" when meaningful evidence "
-        "is absent.\n\n"
+        "is absent. Where a requirement lists checklist elements, the classification "
+        "follows the checklist rule given with the requirements instead.\n\n"
         "Also assign confidence in the verdict: high when evidence and boundary are clear; "
         "medium when interpretation is needed; low when evidence is ambiguous, conflicting, "
         "hard to read, chart-dependent, or near a classification boundary. Confidence is "
@@ -787,9 +939,11 @@ def _build_prompt(
     only_requirement_ids: set[str] | None = None,
     review_context: dict[str, Any] | None = None,
     review_instruction: str | None = None,
-) -> tuple[str, dict[str, dict[str, str]]]:
+    requirement_elements: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
+) -> tuple[str, dict[str, dict[str, Any]]]:
     refs = requirement_refs or {}
-    expected: dict[str, dict[str, str]] = {}
+    checklists = requirement_elements or {}
+    expected: dict[str, dict[str, Any]] = {}
     scope_instruction = (
         f"Assess each supplied requirement of the {full_name} ({framework}) framework."
         if only_requirement_ids is not None
@@ -813,12 +967,50 @@ def _build_prompt(
                 lines.append(
                     f"{requirement_id}. [{topic}]{reference_tag} {requirement}"
                 )
+                elements = checklists.get(
+                    requirement_key(framework, requirement), []
+                )
+                if elements:
+                    lines.append("   Checklist elements:")
+                    lines.extend(
+                        f"   - {element['element_id']}"
+                        f"{'' if element['counts_towards_covers'] else ' (optional)'}"
+                        f": {element['element']}"
+                        for element in elements
+                    )
                 expected[requirement_id] = {
                     "topic": topic,
                     "reference": reference,
                     "requirement": requirement,
+                    "elements": elements,
                 }
             idx += 1
+
+    if any(entry["elements"] for entry in expected.values()):
+        lines.extend(
+            [
+                "",
+                "CHECKLIST ELEMENTS: Some requirements list checklist elements "
+                "drawn from the framework's guidance. For each such "
+                "requirement, return one element_findings entry for every "
+                "element, using its element ID exactly as supplied. Mark an "
+                'element "evidenced" only when the report specifically '
+                "discloses it, and quote the strongest evidence (no more than "
+                "about 25 words) with its page marker. Use \"not applicable\" "
+                "only when the element depends on a circumstance, for example "
+                '"where relevant" or "if the organisation has set targets", '
+                "that the report shows does not apply. Otherwise use \"not "
+                'evidenced" with an empty evidence string. Set the '
+                "classification from the elements: 'Covers the framework' when "
+                "every applicable element that is not marked optional is "
+                "evidenced, 'Partly covers the framework' when some element is "
+                "evidenced, and \"Doesn't cover the framework\" when none is. "
+                "When every applicable element is optional, one evidenced "
+                "element is enough for 'Covers the framework'. For "
+                "requirements without checklist elements, return an empty "
+                "element_findings array.",
+            ]
+        )
 
     if review_instruction:
         lines.extend(["", review_instruction])
@@ -861,7 +1053,10 @@ def _build_prompt(
             '  "classification": "<Covers the framework | Partly covers the framework | Doesn\'t cover the framework>",',
             '  "confidence": "<high | medium | low>",',
             '  "confidence_reason": "<one concise sentence explaining uncertainty>",',
-            '  "rationale": "<2-3 sentence evidence-based explanation>"',
+            '  "rationale": "<2-3 sentence evidence-based explanation>",',
+            '  "element_findings": [{"element_id": "<E-number exactly as supplied>", '
+            '"status": "<evidenced | not evidenced | not applicable>", '
+            '"evidence": "<[Page N] short verbatim quote, or empty string>"}]',
             "}",
             "If there is no relevant evidence, use an empty extracts array and Doesn't cover the framework.",
             "Return raw JSON only: no markdown, backticks, or preamble.",
@@ -965,9 +1160,35 @@ def _usage_values(message: Any, provider: str = "anthropic") -> dict[str, int]:
     }
 
 
+def _element_findings_valid(
+    item: dict[str, Any],
+    expected_entry: dict[str, Any],
+) -> bool:
+    """Check that a model marked every checklist element exactly once."""
+    elements = expected_entry.get("elements") or []
+    findings = item.get("element_findings", [])
+    if not isinstance(findings, list):
+        return False
+    if not elements:
+        return True
+    returned_ids = []
+    for finding in findings:
+        if (
+            not isinstance(finding, dict)
+            or not isinstance(finding.get("element_id"), str)
+            or normalise_element_status(finding.get("status")) is None
+            or not isinstance(finding.get("evidence", ""), str)
+        ):
+            return False
+        returned_ids.append(" ".join(finding["element_id"].split()))
+    return sorted(returned_ids) == sorted(
+        element["element_id"] for element in elements
+    )
+
+
 def _validate_items(
     items: Iterable[dict[str, Any]],
-    expected: dict[str, dict[str, str]],
+    expected: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     items = list(items)
     returned_ids = [str(item.get("requirement_id", "")) for item in items]
@@ -981,13 +1202,23 @@ def _validate_items(
             "The selected model returned an incomplete requirement set "
             f"(missing={missing}, unexpected_or_duplicate={extras})."
         )
+    unmarked = sorted(
+        requirement_id
+        for requirement_id, item in zip(returned_ids, items)
+        if not _element_findings_valid(item, expected[requirement_id])
+    )
+    if unmarked:
+        raise AnalysisResponseError(
+            "The selected model did not mark every checklist element "
+            f"(requirements={unmarked})."
+        )
     return items
 
 
 def _normalise_items(
     framework: str,
     items: Iterable[dict[str, Any]],
-    expected: dict[str, dict[str, str]],
+    expected: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     normalised = []
     for item in items:
@@ -996,6 +1227,39 @@ def _normalise_items(
         extracts = item.get("relevant_extracts", [])
         if not isinstance(extracts, list):
             extracts = []
+        returned = {
+            " ".join(str(finding.get("element_id", "")).split()): finding
+            for finding in item.get("element_findings") or []
+            if isinstance(finding, dict)
+        }
+        findings = [
+            {
+                "element_id": element["element_id"],
+                "element": element["element"],
+                "counts_towards_covers": element["counts_towards_covers"],
+                "status": normalise_element_status(
+                    returned.get(element["element_id"], {}).get("status")
+                ) or ELEMENT_NOT_EVIDENCED,
+                "evidence": str(
+                    returned.get(element["element_id"], {}).get("evidence")
+                    or ""
+                ),
+            }
+            for element in canonical.get("elements") or []
+        ]
+        classification = normalise_classification(item.get("classification"))
+        confidence = normalise_confidence(item.get("confidence"))
+        confidence_reason = str(item.get("confidence_reason", "") or "")
+        checklist_classification = classify_from_checklist(findings)
+        if checklist_classification and checklist_classification != classification:
+            # The fixed checklist rule decides; an inconsistent overall view
+            # is a sign the call is borderline.
+            if confidence == "high":
+                confidence = "medium"
+            confidence_reason = (
+                f"{confidence_reason} The model's overall view was "
+                f"'{classification}'; the checklist result is used instead."
+            ).strip()
         normalised.append(
             {
                 "framework": framework,
@@ -1004,10 +1268,12 @@ def _normalise_items(
                 "reference": canonical["reference"],
                 "requirement": canonical["requirement"],
                 "relevant_extracts": [str(extract) for extract in extracts],
-                "classification": normalise_classification(item.get("classification")),
-                "confidence": normalise_confidence(item.get("confidence")),
-                "confidence_reason": item.get("confidence_reason", ""),
+                "classification": checklist_classification or classification,
+                "confidence": confidence,
+                "confidence_reason": confidence_reason,
                 "rationale": item.get("rationale", ""),
+                "element_findings": findings,
+                "checklist_summary": checklist_summary(findings),
             }
         )
     return normalised
@@ -1016,7 +1282,7 @@ def _normalise_items(
 def _normalise_unambiguous_item_subset(
     framework: str,
     items: Iterable[dict[str, Any]],
-    expected: dict[str, dict[str, str]],
+    expected: dict[str, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], set[str]]:
     """Keep unique in-scope items and return only IDs that still need retrying."""
     items = list(items)
@@ -1024,13 +1290,18 @@ def _normalise_unambiguous_item_subset(
     for item in items:
         requirement_id = str(item.get("requirement_id", ""))
         counts[requirement_id] = counts.get(requirement_id, 0) + 1
+    # element_findings may be omitted for requirements without a checklist.
+    base_fields = _ASSESSMENT_ITEM_FIELDS - {"element_findings"}
     accepted = [
         item
         for item in items
         if (
             str(item.get("requirement_id", "")) in expected
             and counts[str(item.get("requirement_id", ""))] == 1
-            and set(item) == _ASSESSMENT_ITEM_FIELDS
+            and set(item) - {"element_findings"} == base_fields
+            and _element_findings_valid(
+                item, expected[str(item.get("requirement_id", ""))]
+            )
             and isinstance(item.get("requirement_id"), str)
             and isinstance(item.get("topic"), str)
             and isinstance(item.get("reference"), str)
@@ -1279,6 +1550,7 @@ def _analyze_report_with_anthropic(
     retry_missing_items: bool = True,
     usage_accumulator: dict[str, Any] | None = None,
     results_accumulator: list[dict[str, Any]] | None = None,
+    requirement_elements: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Assess frameworks using Anthropic Messages or Message Batches."""
     model = get_model_config(model_id)
@@ -1336,6 +1608,7 @@ def _analyze_report_with_anthropic(
                 else None
             ),
             review_instruction=review_instruction,
+            requirement_elements=requirement_elements,
         )
         if not all_expected:
             continue
@@ -1368,6 +1641,7 @@ def _analyze_report_with_anthropic(
                     else None
                 ),
                 review_instruction=review_instruction,
+                requirement_elements=requirement_elements,
             )
             request_params = {
                 "model": model_id,
@@ -1391,6 +1665,8 @@ def _analyze_report_with_anthropic(
             }
             if model.get("adaptive_thinking"):
                 request_params["thinking"] = {"type": "adaptive"}
+            elif "temperature" in model:
+                request_params["temperature"] = model["temperature"]
             if structured_output:
                 request_params["output_config"] = _anthropic_output_config(
                     reasoning_effort
@@ -1659,6 +1935,7 @@ def _analyze_report_with_anthropic(
                     only_requirement_ids={requirement_id},
                     review_context=framework_review_context,
                     review_instruction=review_instruction,
+                    requirement_elements=requirement_elements,
                 )
                 retry_params = {
                     **prepared_item["params"],
@@ -1835,6 +2112,7 @@ def _analyze_report_with_openai(
     reasoning_effort: str = "medium",
     usage_accumulator: dict[str, Any] | None = None,
     results_accumulator: list[dict[str, Any]] | None = None,
+    requirement_elements: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Assess frameworks using OpenAI Responses or the file-based Batch API."""
     model = get_model_config(model_id)
@@ -1890,6 +2168,7 @@ def _analyze_report_with_openai(
                 else None
             ),
             review_instruction=review_instruction,
+            requirement_elements=requirement_elements,
         )
         if not expected:
             continue
@@ -2150,6 +2429,7 @@ def _analyze_report_with_openai(
                     only_requirement_ids=requirement_filter,
                     review_context=framework_review_context,
                     review_instruction=review_instruction,
+                    requirement_elements=requirement_elements,
                 )
                 requirement_index += len(requirements)
                 if not topic_expected:
@@ -2214,6 +2494,7 @@ def analyze_report(
     batch_id_callback: Callable[[str], None] | None = None,
     client: Any | None = None,
     model_id: str = PRIMARY_MODEL,
+    requirement_elements: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Route one analysis run to the explicitly selected model provider."""
     model = get_model_config(model_id)
@@ -2234,6 +2515,7 @@ def analyze_report(
         "batch_id_callback": batch_id_callback,
         "client": client,
         "model_id": model_id,
+        "requirement_elements": requirement_elements,
     }
     try:
         if model["provider"] == "anthropic":
@@ -2298,6 +2580,17 @@ def _cascade_verdict_snapshot(result: dict[str, Any]) -> dict[str, Any]:
         if isinstance(extracts, list)
         else []
     )
+    # Element text is already listed under each requirement in the prompt,
+    # so later stages receive only each element's mark and evidence.
+    snapshot["element_findings"] = [
+        {
+            "element_id": finding.get("element_id", ""),
+            "status": finding.get("status", ""),
+            "evidence": finding.get("evidence", ""),
+        }
+        for finding in result.get("element_findings") or []
+        if isinstance(finding, dict)
+    ]
     return snapshot
 
 
@@ -2664,6 +2957,7 @@ def analyze_report_with_review_cascade(
     analyst_model_id: str = HAIKU_MODEL,
     reviewer_model_id: str = LUNA_MODEL,
     senior_reviewer_model_id: str = SOL_MODEL,
+    requirement_elements: dict[tuple[str, str], list[dict[str, Any]]] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Run a configurable analyst, reviewer, and conditional senior reviewer.
 
@@ -2774,6 +3068,7 @@ def analyze_report_with_review_cascade(
             "requirement_id_filters": requirement_filters,
             "review_contexts": review_contexts,
             "review_instruction": review_instruction,
+            "requirement_elements": requirement_elements,
             "usage_accumulator": usage_accumulator,
             "results_accumulator": results_accumulator,
         }
@@ -2899,9 +3194,9 @@ def analyze_report_with_review_cascade(
         luna_instruction = (
             "For each requirement, first assess the report evidence independently "
             "without relying on the prior verdict. Only after reaching an "
-            f"independent view, audit the supplied {analyst_label} record and "
-            "correct it if necessary. Return your own final verdict in the "
-            "required schema."
+            f"independent view, audit the supplied {analyst_label} record, "
+            "including any checklist element marks, and correct it if "
+            "necessary. Return your own final verdict in the required schema."
         )
         luna_usage: dict[str, Any] = {}
         luna_results_buffer: list[dict[str, Any]] = []
@@ -3029,8 +3324,9 @@ def analyze_report_with_review_cascade(
                 "For each supplied disputed requirement, first assess the report "
                 "evidence independently without relying on either prior verdict. "
                 f"Only after reaching an independent view, adjudicate the "
-                f"{analyst_label} and {reviewer_label} disagreement and return "
-                "your own final verdict in the required schema."
+                f"{analyst_label} and {reviewer_label} disagreement, including "
+                "any checklist element marks they differ on, and return your "
+                "own final verdict in the required schema."
             )
             terra_usage = {}
             terra_results_buffer: list[dict[str, Any]] = []

@@ -90,6 +90,49 @@ inference, efficiency pathways, and test-time scaling", *Joule*
 [EcoLogits](https://ecologits.ai) model parameter estimates;
 [EPA eGRID2023 summary data](https://www.epa.gov/egrid/summary-data).
 
+## Consistent verdicts
+
+The same report should get the same verdict on every run. Two measures reduce
+run-to-run variation between "Covers" and "Partly covers":
+
+- **Guidance checklists.** For TCFD, TNFD, OSFI, TPT and ESRS E1, each
+  requirement comes with a fixed list of the elements its framework expects,
+  stored in `requirement_checklists.csv`. Every model marks each element as
+  evidenced (with a quote), not evidenced, or not applicable. The app, not the
+  model, then applies a fixed rule:
+  - every required element evidenced → Covers
+  - some element evidenced → Partly covers
+  - no element evidenced → Doesn't cover
+
+  Elements marked "not applicable" are ignored. Elements with "Counts towards
+  Covers" set to `No` are optional: they never block Covers. If only optional
+  elements apply, one evidenced element is enough. The checklist behind each
+  verdict is shown under the finding, in each cascade reviewer's audit trail,
+  and in the Excel export. Requirements without a checklist, including SBTi
+  and the frameworks without guidance, keep the model's overall judgement.
+- **No sampling randomness for Haiku.** Claude Haiku 4.5 now runs at
+  temperature 0. The other models do not accept a temperature setting, so the
+  checklist is what steadies their verdicts.
+
+`requirement_checklists.csv` was generated from the Guidance column of
+`ReportingFrameworks_v1.xlsx` by `tools/build_requirement_checklists.py`:
+
+- Only generic guidance is used, because sector supplements do not apply to
+  every reporter.
+- Example lists ("in the following areas", "such as") become a single element.
+- Guidance that only suggests something ("consider reporting the following
+  indicators", TPT's "may disclose") is marked optional.
+- Definitions, pointers to annexes and administrative rows are left out. The
+  reasons are listed in the script.
+- ESRS E1's guidance is application text, so its elements are the lettered
+  items each ESRS E1 requirement already lists.
+- SBTi's Guidance column only holds section headings, so SBTi has no
+  checklist.
+
+The CSV is meant to be reviewed and edited by the working party, for example
+to change which elements count towards Covers. The app reads it at start-up.
+Rerunning the script overwrites manual edits.
+
 ## Accuracy and scale features
 
 - **Vision-aware PDF analysis:** PyMuPDF retains PDF page numbers and renders up
