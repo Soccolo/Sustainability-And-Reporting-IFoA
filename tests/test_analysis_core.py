@@ -925,6 +925,10 @@ class AnalysisCoreTests(unittest.TestCase):
             )
         )
         self.assertNotIn("thinking", anthropic_client.calls[0])
+        # Haiku runs at temperature 0; Sonnet and Opus reject the setting.
+        self.assertEqual(anthropic_client.calls[0]["temperature"], 0.0)
+        self.assertNotIn("temperature", anthropic_client.calls[1])
+        self.assertNotIn("temperature", anthropic_client.calls[2])
         self.assertEqual(
             anthropic_client.calls[1]["thinking"], {"type": "adaptive"}
         )
