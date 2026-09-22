@@ -1,8 +1,10 @@
 import json
 import sys
+import tempfile
 import types
 import unittest
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -245,6 +247,47 @@ def cascade_item(
         "confidence_reason": confidence_reason,
         "rationale": rationale,
         "relevant_extracts": extracts or [f"[Page 1] Evidence {requirement_id}"],
+    }
+
+
+BOARD_REQUIREMENT = "Describe the board's oversight."
+BOARD_CHECKLIST = {
+    analysis_core.requirement_key("FW A", BOARD_REQUIREMENT): [
+        {
+            "element_id": "E1",
+            "element": "How often the board is briefed",
+            "counts_towards_covers": True,
+        },
+        {
+            "element_id": "E2",
+            "element": "How the board monitors targets",
+            "counts_towards_covers": True,
+        },
+        {
+            "element_id": "E3",
+            "element": "Board members with climate competence",
+            "counts_towards_covers": False,
+        },
+    ]
+}
+
+
+def checklist_item(classification, statuses, confidence="high", rationale="Assessed."):
+    """Return an R0001 assessment with one mark per BOARD_CHECKLIST element."""
+    return {
+        **cascade_item("R0001", classification, confidence, rationale),
+        "element_findings": [
+            {
+                "element_id": f"E{index}",
+                "status": status,
+                "evidence": (
+                    f"[Page {index}] Evidence for E{index}"
+                    if status == analysis_core.ELEMENT_EVIDENCED
+                    else ""
+                ),
+            }
+            for index, status in enumerate(statuses, start=1)
+        ],
     }
 
 
@@ -538,6 +581,382 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertAlmostEqual(below, 0.0272)
         self.assertAlmostEqual(above, 0.0544002)
         self.assertAlmostEqual(batch, above / 2)
+
+    def test_checklist_loader_normalises_keys_and_rejects_duplicates(self):
+        header = (
+            "Framework,Reference,Requirement,Element ID,Element,"
+            "Counts towards Covers,Source,Note\n"
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "checklists.csv"
+            path.write_text(
+                header
+                + 'FW A,Ref,"Describe  the\nboard.",E1,First element,Yes,G1,\n'
+                + 'FW A,Ref,Describe the board.,E2,  Second   element ,No,G2,Opt\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                analysis_core.load_requirement_checklists(path),
+                {
+                    ("FW A", "Describe the board."): [
+                        {
+                            "element_id": "E1",
+                            "element": "First element",
+                            "counts_towards_covers": True,
+                        },
+                        {
+                            "element_id": "E2",
+                            "element": "Second element",
+                            "counts_towards_covers": False,
+                        },
+                    ]
+                },
+            )
+            path.write_text(
+                header
+                + "FW A,Ref,Describe the board.,E1,First,Yes,G1,\n"
+                + "FW A,Ref,Describe the board.,E1,Again,Yes,G1,\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Duplicate checklist element E1"):
+                analysis_core.load_requirement_checklists(path)
+            self.assertEqual(
+                analysis_core.load_requirement_checklists(
+                    Path(folder) / "missing.csv"
+                ),
+                {},
+            )
+
+    def test_checklist_rule_ignores_not_applicable_and_optional_elements(self):
+        evidenced = analysis_core.ELEMENT_EVIDENCED
+        missing = analysis_core.ELEMENT_NOT_EVIDENCED
+        not_applicable = analysis_core.ELEMENT_NOT_APPLICABLE
+
+        def marks(*statuses, optional=()):
+            return [
+                {
+                    "element_id": f"E{index}",
+                    "status": status,
+                    "counts_towards_covers": index not in optional,
+                }
+                for index, status in enumerate(statuses, start=1)
+            ]
+
+        classify = analysis_core.classify_from_checklist
+        covers = analysis_core.CLASSIFICATION_COVERS
+        partly = analysis_core.CLASSIFICATION_PARTLY
+        doesnt = analysis_core.CLASSIFICATION_DOESNT
+        self.assertEqual(classify(marks(evidenced, evidenced)), covers)
+        self.assertEqual(classify(marks(evidenced, missing)), partly)
+        self.assertEqual(classify(marks(missing, missing)), doesnt)
+        self.assertEqual(classify(marks(evidenced, not_applicable)), covers)
+        # Optional elements never block Covers but do show some disclosure.
+        self.assertEqual(
+            classify(marks(evidenced, missing, optional={2})), covers
+        )
+        self.assertEqual(
+            classify(marks(missing, evidenced, optional={2})), partly
+        )
+        # When only optional examples apply, any one of them is enough.
+        self.assertEqual(
+            classify(marks(missing, evidenced, optional={1, 2})), covers
+        )
+        self.assertEqual(
+            classify(marks(missing, missing, optional={1, 2})), doesnt
+        )
+        self.assertIsNone(classify(marks(not_applicable, not_applicable)))
+        self.assertIsNone(classify([]))
+
+        summary = analysis_core.checklist_summary
+        self.assertEqual(
+            summary(marks(evidenced, missing)), "1 of 2 elements evidenced"
+        )
+        self.assertEqual(
+            summary(marks(evidenced, missing, evidenced, optional={3})),
+            "1 of 2 required elements evidenced",
+        )
+        self.assertEqual(
+            summary(marks(evidenced, not_applicable)),
+            "1 of 1 element evidenced; 1 not applicable",
+        )
+        self.assertEqual(
+            summary(marks(missing, evidenced, optional={1, 2})),
+            "1 of 2 optional elements evidenced (any one is enough)",
+        )
+        self.assertEqual(
+            summary(marks(not_applicable)), "No checklist element applies"
+        )
+        self.assertEqual(summary([]), "")
+
+    def test_checklist_marks_decide_the_verdict_and_haiku_runs_at_zero(self):
+        client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        checklist_item(
+                            analysis_core.CLASSIFICATION_COVERS,
+                            [
+                                analysis_core.ELEMENT_EVIDENCED,
+                                analysis_core.ELEMENT_NOT_EVIDENCED,
+                                analysis_core.ELEMENT_EVIDENCED,
+                            ],
+                        )
+                    ]
+                )
+            ]
+        )
+
+        results, _, _ = analysis_core.analyze_report(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            api_key="unused",
+            framework_requirements={"FW A": {"governance": [BOARD_REQUIREMENT]}},
+            framework_full_names={"FW A": "Framework A"},
+            use_batch=False,
+            client=client,
+            requirement_elements=BOARD_CHECKLIST,
+        )
+
+        request = client.calls[0]
+        self.assertEqual(request["temperature"], 0.0)
+        self.assertEqual(request["max_tokens"], 32_768)
+        prompt = request["messages"][0]["content"][-1]["text"]
+        self.assertIn("   - E1: How often the board is briefed", prompt)
+        self.assertIn(
+            "   - E3 (optional): Board members with climate competence", prompt
+        )
+        self.assertIn("CHECKLIST ELEMENTS:", prompt)
+        self.assertIn('"element_findings"', prompt)
+
+        result = results[0]
+        # The model said Covers, but a required element is not evidenced.
+        self.assertEqual(
+            result["classification"], analysis_core.CLASSIFICATION_PARTLY
+        )
+        self.assertEqual(result["confidence"], "medium")
+        self.assertIn(
+            "the checklist result is used instead", result["confidence_reason"]
+        )
+        self.assertEqual(
+            result["checklist_summary"], "1 of 2 required elements evidenced"
+        )
+        self.assertEqual(
+            [finding["status"] for finding in result["element_findings"]],
+            ["evidenced", "not evidenced", "evidenced"],
+        )
+        self.assertEqual(
+            result["element_findings"][1]["element"],
+            "How the board monitors targets",
+        )
+        self.assertFalse(result["element_findings"][2]["counts_towards_covers"])
+
+    def test_requirements_without_a_checklist_keep_the_model_verdict(self):
+        prompt, expected = analysis_core._build_prompt(
+            "FW B",
+            "Framework B",
+            {"metrics": ["Disclose emissions."]},
+            {},
+            requirement_elements=BOARD_CHECKLIST,
+        )
+        self.assertNotIn("CHECKLIST ELEMENTS:", prompt)
+        self.assertEqual(expected["R0001"]["elements"], [])
+
+        item = cascade_item(
+            "R0001", analysis_core.CLASSIFICATION_COVERS, "high", "Clear."
+        )
+        accepted, missing = analysis_core._normalise_unambiguous_item_subset(
+            "FW B", [item], expected
+        )
+        self.assertEqual(missing, set())
+        self.assertEqual(
+            accepted[0]["classification"], analysis_core.CLASSIFICATION_COVERS
+        )
+        self.assertEqual(accepted[0]["element_findings"], [])
+        self.assertEqual(accepted[0]["checklist_summary"], "")
+
+    def test_unmarked_checklist_element_is_retried_with_anthropic(self):
+        incomplete = checklist_item(
+            analysis_core.CLASSIFICATION_COVERS,
+            [analysis_core.ELEMENT_EVIDENCED, analysis_core.ELEMENT_EVIDENCED],
+        )
+        complete = checklist_item(
+            analysis_core.CLASSIFICATION_COVERS,
+            [
+                analysis_core.ELEMENT_EVIDENCED,
+                analysis_core.ELEMENT_EVIDENCED,
+                analysis_core.ELEMENT_NOT_EVIDENCED,
+            ],
+        )
+        client = SequencedAnthropicClient(
+            [message_for([incomplete]), message_for([complete])]
+        )
+
+        results, _, _ = analysis_core.analyze_report(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            api_key="unused",
+            framework_requirements={"FW A": {"governance": [BOARD_REQUIREMENT]}},
+            framework_full_names={"FW A": "Framework A"},
+            use_batch=False,
+            client=client,
+            requirement_elements=BOARD_CHECKLIST,
+        )
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(
+            results[0]["classification"], analysis_core.CLASSIFICATION_COVERS
+        )
+        self.assertEqual(results[0]["confidence"], "high")
+
+    def test_unmarked_checklist_element_is_retried_with_openai(self):
+        incomplete = checklist_item(
+            analysis_core.CLASSIFICATION_PARTLY,
+            [analysis_core.ELEMENT_EVIDENCED],
+        )
+        complete = checklist_item(
+            analysis_core.CLASSIFICATION_DOESNT,
+            [
+                analysis_core.ELEMENT_NOT_EVIDENCED,
+                analysis_core.ELEMENT_NOT_EVIDENCED,
+                analysis_core.ELEMENT_NOT_APPLICABLE,
+            ],
+            confidence="medium",
+        )
+        client = SequencedOpenAIClient(
+            [openai_response_body([incomplete]), openai_response_body([complete])]
+        )
+
+        results, _, _ = analysis_core.analyze_report(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            api_key="unused",
+            framework_requirements={"FW A": {"governance": [BOARD_REQUIREMENT]}},
+            framework_full_names={"FW A": "Framework A"},
+            model_id=analysis_core.LUNA_MODEL,
+            use_batch=False,
+            client=client,
+            requirement_elements=BOARD_CHECKLIST,
+        )
+
+        self.assertEqual(len(client.calls), 2)
+        self.assertEqual(
+            results[0]["classification"], analysis_core.CLASSIFICATION_DOESNT
+        )
+        # The optional E3 does not apply, so both remaining elements count.
+        self.assertEqual(
+            results[0]["checklist_summary"],
+            "0 of 2 elements evidenced; 1 not applicable",
+        )
+        schema = client.calls[0]["text"]["format"]["schema"]
+        element_schema = schema["properties"]["items"]["items"]["properties"][
+            "element_findings"
+        ]["items"]
+        self.assertEqual(
+            element_schema["properties"]["status"]["enum"],
+            analysis_core.ELEMENT_STATUSES,
+        )
+
+    def test_cascade_passes_element_marks_and_adjudicates_derived_verdicts(self):
+        evidenced = analysis_core.ELEMENT_EVIDENCED
+        missing = analysis_core.ELEMENT_NOT_EVIDENCED
+        haiku_client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        checklist_item(
+                            analysis_core.CLASSIFICATION_COVERS,
+                            [evidenced, missing, missing],
+                        )
+                    ]
+                )
+            ]
+        )
+        openai_client = SequencedOpenAIClient(
+            [
+                openai_response_body(
+                    [
+                        checklist_item(
+                            analysis_core.CLASSIFICATION_COVERS,
+                            [evidenced, evidenced, missing],
+                        )
+                    ]
+                ),
+                openai_response_body(
+                    [
+                        checklist_item(
+                            analysis_core.CLASSIFICATION_COVERS,
+                            [evidenced, evidenced, evidenced],
+                        )
+                    ]
+                ),
+            ]
+        )
+
+        results, _, _ = analysis_core.analyze_report_with_review_cascade(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            anthropic_api_key="anthropic-key",
+            openai_api_key="openai-key",
+            framework_requirements={"FW A": {"governance": [BOARD_REQUIREMENT]}},
+            framework_full_names={"FW A": "Framework A"},
+            anthropic_client=haiku_client,
+            openai_client=openai_client,
+            requirement_elements=BOARD_CHECKLIST,
+        )
+
+        result = results[0]
+        # Analyst: Partly (E2 missing); reviewer: Covers; so the senior
+        # reviewer adjudicates the derived verdicts, not the model labels.
+        self.assertEqual(
+            result["model_verdicts"]["analyst"]["classification"],
+            analysis_core.CLASSIFICATION_PARTLY,
+        )
+        self.assertEqual(result["cascade_status"], "senior_reviewer_adjudicated")
+        self.assertEqual(
+            result["classification"], analysis_core.CLASSIFICATION_COVERS
+        )
+        self.assertEqual(
+            result["checklist_summary"], "2 of 2 required elements evidenced"
+        )
+        reviewer_prompt = openai_client.calls[0]["input"][0]["content"][-1][
+            "text"
+        ]
+        self.assertIn("including any checklist element marks", reviewer_prompt)
+        self.assertIn('"status": "not evidenced"', reviewer_prompt)
+        self.assertIn("   - E2: How the board monitors targets", reviewer_prompt)
+        analyst_marks = result["model_verdicts"]["analyst"]["element_findings"]
+        self.assertEqual(
+            analyst_marks[1], {"element_id": "E2", "status": missing, "evidence": ""}
+        )
+
+    def test_bundled_checklists_match_the_requirements_workbook(self):
+        import pandas as pd
+
+        root = Path(__file__).resolve().parents[1]
+        checklists = analysis_core.load_requirement_checklists(
+            root / "requirement_checklists.csv"
+        )
+        workbook = pd.read_excel(
+            root / "ReportingFrameworks_v1.xlsx", engine="openpyxl"
+        )
+        requirement_keys = {
+            analysis_core.requirement_key(row.Framework, row.Recommendation)
+            for row in workbook.itertuples()
+            if isinstance(row.Recommendation, str)
+        }
+        self.assertTrue(checklists)
+        self.assertLessEqual(set(checklists), requirement_keys)
+        self.assertEqual(
+            {framework for framework, _ in checklists},
+            {"TCFD", "TNFD", "OSFI", "TPT", "ESRS E1"},
+        )
+        for elements in checklists.values():
+            self.assertEqual(
+                [element["element_id"] for element in elements],
+                [f"E{index}" for index in range(1, len(elements) + 1)],
+            )
+            self.assertTrue(all(element["element"] for element in elements))
 
     def test_fast_mode_pricing_follows_the_tier_openai_reports(self):
         def sol_cost(service_tier=None, **tokens):
@@ -925,6 +1344,9 @@ class AnalysisCoreTests(unittest.TestCase):
             )
         )
         self.assertNotIn("thinking", anthropic_client.calls[0])
+        self.assertEqual(anthropic_client.calls[0]["temperature"], 0.0)
+        self.assertNotIn("temperature", anthropic_client.calls[1])
+        self.assertNotIn("temperature", anthropic_client.calls[2])
         self.assertEqual(
             anthropic_client.calls[1]["thinking"], {"type": "adaptive"}
         )
