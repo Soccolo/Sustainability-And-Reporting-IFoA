@@ -36,12 +36,7 @@ _ANALYSIS_CORE_EXPORTS = (
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "CACHED_PROMPT_TOKEN_ENERGY_RATIO",
-    "CONTEXT_ENERGY_REFERENCE_TOKENS",
-    "CONTEXT_OUTPUT_ENERGY_UPLIFT",
-    "CONTEXT_PROMPT_ENERGY_UPLIFT",
     "EMISSIONS_UNCERTAINTY_FACTOR",
-    "ENERGY_WH_PER_1K_OUTPUT_BASE",
-    "ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS",
     "FAST_MODE_ENERGY_MULTIPLIER",
     "FAST_SERVICE_TIERS",
     "GRID_CARBON_INTENSITY_G_PER_KWH",
@@ -73,12 +68,7 @@ from analysis_core import (
     ANALYST_MODELS,
     AnalysisAuthenticationError,
     CACHED_PROMPT_TOKEN_ENERGY_RATIO,
-    CONTEXT_ENERGY_REFERENCE_TOKENS,
-    CONTEXT_OUTPUT_ENERGY_UPLIFT,
-    CONTEXT_PROMPT_ENERGY_UPLIFT,
     EMISSIONS_UNCERTAINTY_FACTOR,
-    ENERGY_WH_PER_1K_OUTPUT_BASE,
-    ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS,
     FAST_MODE_ENERGY_MULTIPLIER,
     FAST_SERVICE_TIERS,
     GRID_CARBON_INTENSITY_G_PER_KWH,
@@ -713,14 +703,14 @@ def render_model_api_key(model_id, widget_key):
     )
 
 
+def usd(amount, spec="g"):
+    """Format dollars for Streamlit text, where a bare "$" starts maths."""
+    return f"\\${amount:{spec}}"
+
+
 def render_model_price_caption(model_id):
     """Show the list prices that apply to the selected model."""
     model = get_model_config(model_id)
-    long_context_note = (
-        " Inputs above 272K tokens use higher long-context rates."
-        if model.get("long_context_threshold")
-        else ""
-    )
     multiplier = requested_price_multiplier(model_id)
     if multiplier != 1.0:
         effort = model.get("reasoning_effort")
@@ -728,24 +718,25 @@ def render_model_price_caption(model_id):
         st.caption(
             f"{model['description']}. Runs in Fast mode{effort_note}. USD "
             "per 1M tokens — Fast mode: "
-            f"${model['input_price'] * multiplier:g} input / "
-            f"${model['output_price'] * multiplier:g} output; cache read / "
-            f"write: ${model['cached_input_price'] * multiplier:g} / "
-            f"${model['cache_write_price'] * multiplier:g}. That is "
-            f"{multiplier:g}× the standard ${model['input_price']:g} / "
-            f"${model['output_price']:g}; requests the provider downgrades "
-            "to standard processing are billed at standard rates. Vision "
-            f"and reasoning change token usage.{long_context_note}"
+            f"{usd(model['input_price'] * multiplier)} input / "
+            f"{usd(model['output_price'] * multiplier)} output; cache read / "
+            f"write: {usd(model['cached_input_price'] * multiplier)} / "
+            f"{usd(model['cache_write_price'] * multiplier)}. Fast mode "
+            f"costs {multiplier:g}× the standard "
+            f"{usd(model['input_price'])} input / "
+            f"{usd(model['output_price'])} output; any request the provider "
+            "runs at standard speed is charged the standard price. Vision "
+            "and reasoning change token usage."
         )
         return
     st.caption(
         f"{model['description']}. USD per 1M tokens — standard: "
-        f"${model['input_price']:g} input / ${model['output_price']:g} "
-        f"output; cache read / write: ${model['cached_input_price']:g} / "
-        f"${model['cache_write_price']:g}; Batch API (cheaper, slower): "
-        f"${model['batch_input_price']:g} input / "
-        f"${model['batch_output_price']:g} output. Vision and reasoning "
-        f"change token usage.{long_context_note}"
+        f"{usd(model['input_price'])} input / {usd(model['output_price'])} "
+        f"output; cache read / write: {usd(model['cached_input_price'])} / "
+        f"{usd(model['cache_write_price'])}; Batch API (cheaper, slower): "
+        f"{usd(model['batch_input_price'])} input / "
+        f"{usd(model['batch_output_price'])} output. Vision and reasoning "
+        "change token usage."
     )
 
 
@@ -771,45 +762,44 @@ def emissions_summary_html(emissions):
 
 def render_estimate_methodology(model_ids):
     """Explain how run costs and CO2e are estimated for the given models."""
+    read_share = 1 / PROMPT_TOKEN_ENERGY_RATIO
+    reused_share = 1 / (
+        PROMPT_TOKEN_ENERGY_RATIO * CACHED_PROMPT_TOKEN_ENERGY_RATIO
+    )
     with st.expander("How the cost and CO2 estimates are calculated"):
         st.markdown(
-            "**Cost.** Each provider reports the tokens it billed for every "
-            "request. The app prices them at the list prices in its model "
-            "catalogue (22 September 2026), including prompt-cache read and "
-            "write rates, the 50% Batch API discount, OpenAI's higher rates "
-            "for prompts above 272K tokens, and 2× Fast mode rates for "
-            "requests that OpenAI reports it served in Fast mode.\n\n"
-            "**CO2.** The estimate covers the electricity used to serve this "
-            "run's requests, on a location-based basis. Model training, "
-            "hardware manufacturing and water use are excluded. Providers do "
-            "not publish per-model energy data, so the steps below rely on "
-            "published research:\n"
-            "- **Electricity per output token** is "
-            f"{ENERGY_WH_PER_1K_OUTPUT_BASE:g} Wh + "
-            f"{ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS:g} Wh per "
-            "billion active parameters, for every 1,000 tokens. This line is "
-            "fitted to the Oviedo et al. (Joule, 2026) estimates for "
-            "production serving, which include whole-server power and "
-            "data-centre overhead. Active-parameter ranges come from "
-            "EcoLogits, taking the geometric midpoint of each range.\n"
-            f"- **Prompt tokens** count as {PROMPT_TOKEN_ENERGY_RATIO:g} of an "
-            "output token, because they are processed in parallel. **Cache "
-            "reads** count as "
-            f"{PROMPT_TOKEN_ENERGY_RATIO * CACHED_PROMPT_TOKEN_ENERGY_RATIO:g}"
-            ", because they skip recomputation. Energy per token rises with "
-            f"prompt length, reaching +{CONTEXT_PROMPT_ENERGY_UPLIFT:.0%} for "
-            f"prompt tokens and +{CONTEXT_OUTPUT_ENERGY_UPLIFT:.0%} for output "
-            f"tokens at {CONTEXT_ENERGY_REFERENCE_TOKENS // 1000}K tokens.\n"
-            f"- **Fast mode** requests count {FAST_MODE_ENERGY_MULTIPLIER:g}× "
-            "(a conservative assumption: Fast mode buys extra accelerator "
-            "time per token). Batch requests use the standard factors.\n"
-            "- **Electricity is converted** at "
-            f"{GRID_CARBON_INTENSITY_G_PER_KWH:g} g CO2e/kWh, the US average "
-            "grid intensity in EPA eGRID2023.\n"
-            "- **The plausible range** divides and multiplies the central "
-            f"figure by {EMISSIONS_UNCERTAINTY_FACTOR:g}. It reflects "
-            "uncertainty in model size, hardware generation, idle capacity "
-            "and data-centre location."
+            "**Cost.** Each AI provider reports how many tokens it read and "
+            "wrote for every request; a token is roughly three-quarters of a "
+            "word. The app prices them at each model's published rates on "
+            "22 September 2026, including the discounts for re-used text and "
+            "batch processing, and the higher prices for very long documents "
+            "and for Fast mode.\n\n"
+            "**CO2.** This estimates the electricity used to run the AI "
+            "models for this analysis and the emissions from generating it. "
+            "It excludes training the models, manufacturing the hardware and "
+            "water use. Providers do not publish energy figures for their "
+            "models, so the estimate relies on published research:\n"
+            "- **Larger models use more electricity per token.** Each "
+            "model's figure comes from its estimated size (EcoLogits) and a "
+            "peer-reviewed study of AI models running in data centres "
+            "(Oviedo et al., *Joule*, 2026), which includes cooling and other "
+            "data-centre overheads.\n"
+            "- **Reading uses less electricity than writing.** Each token a "
+            f"model reads counts as 1/{read_share:g} of a token it writes. "
+            "Text the provider has recently processed and can re-use, such "
+            "as the report re-sent with each group of requirements, counts "
+            f"as 1/{reused_share:g}. Longer documents use more electricity "
+            "per token.\n"
+            f"- **Fast mode counts {FAST_MODE_ENERGY_MULTIPLIER:g}×**, a "
+            "cautious assumption, because it gives each request extra "
+            "computing time. Batch processing uses the standard figures.\n"
+            "- **Electricity is converted to CO2e** at "
+            f"{GRID_CARBON_INTENSITY_G_PER_KWH:g} g per kWh, the average for "
+            "the US electricity grid (EPA eGRID2023).\n"
+            "- **The range** runs from "
+            f"1/{EMISSIONS_UNCERTAINTY_FACTOR:g} of the central figure to "
+            f"{EMISSIONS_UNCERTAINTY_FACTOR:g}× it, because model sizes, "
+            "hardware and data-centre locations are not published."
         )
         factor_rows = []
         for model_id in dict.fromkeys(model_ids):
@@ -821,11 +811,13 @@ def render_estimate_methodology(model_ids):
             factor_rows.append(
                 {
                     "Model": model["label"],
-                    "Active parameters (billions)": f"{low:g}–{high:g}",
-                    "Wh per 1,000 output tokens": round(
+                    "Estimated size (billion active parameters)": (
+                        f"{low:g}–{high:g}"
+                    ),
+                    "Wh per 1,000 tokens written": round(
                         model_energy_per_1k_output_wh(model_id), 3
                     ),
-                    "Parameter source": model["parameter_source"],
+                    "Size estimate source": model["parameter_source"],
                 }
             )
         if factor_rows:
@@ -4268,8 +4260,9 @@ def main():
                 model_label = get_model_config(model_id_used)["label"]
                 st.info(
                     f"{model_label} estimated cost — {name_a}: "
-                    f"${cost_a:.4f}; {name_b}: ${cost_b:.4f}; combined: "
-                    f"${cost_a + cost_b:.4f}. Standard API pricing applied. "
+                    f"{usd(cost_a, '.4f')}; {name_b}: {usd(cost_b, '.4f')}; "
+                    f"combined: {usd(cost_a + cost_b, '.4f')}. Standard API "
+                    "pricing applied. "
                     "Estimated emissions — "
                     f"{name_a}: ~{format_estimate(emissions_a['co2e_g'])} g "
                     f"CO2e; {name_b}: ~{format_estimate(emissions_b['co2e_g'])} "
