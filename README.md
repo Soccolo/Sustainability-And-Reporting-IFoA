@@ -11,8 +11,9 @@ GPT-5.6 Terra) or configure all three roles in the optional reviewed cascade:
 
 1. **Analyst:** Claude Haiku 4.5 or GPT-6 Luna performs the initial assessment.
 2. **Reviewer:** GPT-6 Luna, Claude Haiku 4.5, GPT-5.6 Terra, or Claude
-   Sonnet 5 reviews every analyst verdict, including its evidence, confidence,
-   and audit rationale.
+   Sonnet 5 assesses every requirement blind: it reads the report itself and
+   never sees the analyst's verdict, evidence or rationale, so agreement is
+   independent confirmation rather than the reviewer following the analyst.
 3. **Senior reviewer:** GPT-6 Sol or Claude Opus 5.5 reviews only requirements
    where analyst and reviewer assign different classifications. GPT-6 Sol, the
    default, always runs in OpenAI Fast mode at medium reasoning effort.

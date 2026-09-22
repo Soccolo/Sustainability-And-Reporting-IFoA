@@ -2105,9 +2105,9 @@ def main():
                 "This is the first control on the tab, and the one that most "
                 "changes what you get. **Single model** sends each "
                 "requirement to one model of your choice. **Reviewed "
-                "cascade** has a second model independently check every "
-                "verdict, and calls a third only where the first two "
-                "disagree — see “How the reviewed cascade works” below.",
+                "cascade** has a second model assess every requirement "
+                "without seeing the first model's answer, and calls a third "
+                "only where the two disagree — see “How the reviewed cascade works” below.",
                 "**Single model** for your first run and for routine work. "
                 "Switch to the cascade when a result is going to be relied "
                 "on and you want the disagreements surfaced — it is slower "
@@ -2257,10 +2257,11 @@ def main():
                 "and gives every requirement a classification, evidence and "
                 "a confidence flag.\n\n"
                 "**2. Reviewer** — a *different* model (GPT-6 Luna, Haiku, "
-                "GPT-5.6 Terra or Sonnet 5) independently checks each of "
-                "those verdicts, including the evidence and reasoning behind "
-                "them. The app will not let the same model be both analyst "
-                "and reviewer.\n\n"
+                "GPT-5.6 Terra or Sonnet 5) assesses every requirement "
+                "blind: it reads the report itself and never sees the "
+                "analyst's verdict, so agreement is a genuine second opinion. "
+                "The app will not let the same model be both analyst and "
+                "reviewer.\n\n"
                 "**3. Senior reviewer** — GPT-6 Sol (Fast mode, medium "
                 "effort) or Claude Opus 5.5 is called **only** where the "
                 "analyst and reviewer disagreed, and adjudicates. You are "
@@ -2847,8 +2848,9 @@ def main():
                     format_func=model_picker_label,
                     key="cascade_reviewer_model_id",
                     help=(
-                        "The reviewer independently checks every analyst "
-                        "assessment. The analyst model is excluded."
+                        "The reviewer assesses every requirement without "
+                        "seeing the analyst's verdict. The analyst model is "
+                        "excluded."
                     ),
                 )
                 available_senior_reviewers = tuple(
