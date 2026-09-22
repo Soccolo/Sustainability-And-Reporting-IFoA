@@ -427,7 +427,9 @@ class AnalysisCoreTests(unittest.TestCase):
 
     def test_model_catalog_and_picker_prices_are_consistent(self):
         self.assertEqual(analysis_core.PRIMARY_MODEL, analysis_core.HAIKU_MODEL)
-        self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5")
+        self.assertEqual(analysis_core.LUNA_MODEL, "gpt-6-luna")
+        self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5-5")
+        self.assertEqual(analysis_core.SOL_MODEL, "gpt-6-sol")
         self.assertEqual(
             analysis_core.USER_SELECTABLE_MODELS,
             (
@@ -436,18 +438,29 @@ class AnalysisCoreTests(unittest.TestCase):
                 analysis_core.TERRA_MODEL,
             ),
         )
+        self.assertEqual(
+            analysis_core.SENIOR_REVIEWER_MODELS,
+            (analysis_core.SOL_MODEL, analysis_core.OPUS_MODEL),
+        )
+        # provider, input, output, cache read, cache write, batch in/out
         expected = {
-            analysis_core.HAIKU_MODEL: ("anthropic", 1.0, 5.0, 0.5, 2.5),
-            analysis_core.LUNA_MODEL: ("openai", 1.0, 6.0, 0.5, 3.0),
-            analysis_core.TERRA_MODEL: ("openai", 2.5, 15.0, 1.25, 7.5),
+            analysis_core.HAIKU_MODEL: (
+                "anthropic", 1.0, 5.0, 0.1, 1.25, 0.5, 2.5
+            ),
+            analysis_core.LUNA_MODEL: (
+                "openai", 0.1, 0.5, 0.01, 0.125, 0.05, 0.25
+            ),
+            analysis_core.TERRA_MODEL: (
+                "openai", 2.0, 12.0, 0.2, 2.5, 1.0, 6.0
+            ),
             analysis_core.SONNET_MODEL: (
-                "anthropic", 2.0, 10.0, 1.0, 5.0
+                "anthropic", 2.0, 10.0, 0.2, 2.5, 1.0, 5.0
             ),
             analysis_core.OPUS_MODEL: (
-                "anthropic", 5.0, 25.0, 2.5, 12.5
+                "anthropic", 4.0, 20.0, 0.2, 5.0, 2.0, 10.0
             ),
             analysis_core.SOL_MODEL: (
-                "openai", 5.0, 30.0, 2.5, 15.0
+                "openai", 2.0, 10.0, 0.2, 2.5, 1.0, 5.0
             ),
         }
         for model_id, values in expected.items():
@@ -457,12 +470,22 @@ class AnalysisCoreTests(unittest.TestCase):
                     config["provider"],
                     config["input_price"],
                     config["output_price"],
+                    config["cached_input_price"],
+                    config["cache_write_price"],
                     config["batch_input_price"],
                     config["batch_output_price"],
                 ),
                 values,
             )
             self.assertIn("per 1M tokens", analysis_core.model_picker_label(model_id))
+        self.assertEqual(
+            analysis_core.model_picker_label(analysis_core.SOL_MODEL),
+            "GPT-6 Sol (Fast mode) — $4 input / $20 output per 1M tokens",
+        )
+        self.assertEqual(
+            analysis_core.model_picker_label(analysis_core.OPUS_MODEL),
+            "Claude Opus 5.5 — $4 input / $20 output per 1M tokens",
+        )
         with self.assertRaises(ValueError):
             analysis_core.estimate_usage_cost(
                 [{"model": "unknown", "input_tokens": 1}]
@@ -512,32 +535,313 @@ class AnalysisCoreTests(unittest.TestCase):
                 }
             ]
         )
-        self.assertAlmostEqual(below, 0.272)
-        self.assertAlmostEqual(above, 0.544002)
+        self.assertAlmostEqual(below, 0.0272)
+        self.assertAlmostEqual(above, 0.0544002)
         self.assertAlmostEqual(batch, above / 2)
 
-    def test_review_cascade_role_rules_reject_invalid_or_reused_models(self):
-        analysis_core.validate_review_cascade_roles(
+    def test_fast_mode_pricing_follows_the_tier_openai_reports(self):
+        def sol_cost(service_tier=None, **tokens):
+            record = {"model": analysis_core.SOL_MODEL, **tokens}
+            if service_tier is not None:
+                record["service_tier"] = service_tier
+            cost, _ = analysis_core.estimate_usage_cost([record])
+            return cost
+
+        # Below the 272K long-context threshold: $2 input / $10 output.
+        short_tokens = {"input_tokens": 100_000, "output_tokens": 100_000}
+        self.assertAlmostEqual(sol_cost("fast", **short_tokens), 2.4)
+        # GPT-5.6 and earlier models report Fast mode as "priority".
+        self.assertAlmostEqual(sol_cost("priority", **short_tokens), 2.4)
+        # Downgraded requests report "default" and are billed normally.
+        self.assertAlmostEqual(sol_cost("default", **short_tokens), 1.2)
+        self.assertAlmostEqual(sol_cost(**short_tokens), 1.2)
+        # Fast mode doubles the long-context rates as well.
+        self.assertAlmostEqual(
+            sol_cost("fast", input_tokens=300_000, output_tokens=1_000),
+            300_000 * 8.0 / 1_000_000 + 1_000 * 30.0 / 1_000_000,
+        )
+
+    def test_opus_5_5_uses_its_discounted_cache_read_rate(self):
+        cost, savings = analysis_core.estimate_usage_cost(
+            [
+                {
+                    "model": analysis_core.OPUS_MODEL,
+                    "cache_read_tokens": 1_000_000,
+                    "cache_write_tokens": 1_000_000,
+                }
+            ]
+        )
+        self.assertAlmostEqual(cost, 0.2 + 5.0)
+        self.assertAlmostEqual(savings, (4.0 - 0.2) - (5.0 - 4.0))
+
+    def test_openai_usage_records_the_served_service_tier(self):
+        def empty_total():
+            return {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_read_tokens": 0,
+                "cache_write_tokens": 0,
+                "batch_input_tokens": 0,
+                "batch_output_tokens": 0,
+                "usage_records": [],
+                "models_used": set(),
+            }
+
+        usage = {"input_tokens": 100, "output_tokens": 10}
+        downgraded = empty_total()
+        analysis_core._add_usage(
+            downgraded,
+            {"usage": usage, "service_tier": "default"},
+            analysis_core.SOL_MODEL,
+            provider="openai",
+            requested_service_tier="fast",
+        )
+        self.assertEqual(
+            downgraded["usage_records"][0]["service_tier"], "default"
+        )
+
+        unreported = empty_total()
+        analysis_core._add_usage(
+            unreported,
+            {"usage": usage},
+            analysis_core.SOL_MODEL,
+            provider="openai",
+            requested_service_tier="fast",
+        )
+        self.assertEqual(unreported["usage_records"][0]["service_tier"], "fast")
+
+        anthropic_total = empty_total()
+        analysis_core._add_usage(
+            anthropic_total,
+            message_for([]),
+            analysis_core.OPUS_MODEL,
+        )
+        self.assertNotIn("service_tier", anthropic_total["usage_records"][0])
+
+    def test_sol_requests_fast_mode_at_medium_effort_outside_batches(self):
+        item = {
+            "requirement_id": "R0001",
+            "topic": "governance",
+            "reference": "",
+            "requirement": "A requirement",
+            "classification": "Covers the framework",
+            "confidence": "high",
+            "confidence_reason": "Clear evidence.",
+            "rationale": "Complete.",
+            "relevant_extracts": ["[Page 1] Evidence"],
+        }
+        common = {
+            "report_text": "[Page 1] Evidence",
+            "selected_frameworks": ["FW A"],
+            "api_key": "unused",
+            "framework_requirements": {
+                "FW A": {"governance": ["A requirement"]}
+            },
+            "framework_full_names": {"FW A": "Framework A"},
+            "model_id": analysis_core.SOL_MODEL,
+            "poll_interval_seconds": 0,
+        }
+        sync_body = openai_response_body([item])
+        sync_body["service_tier"] = "default"
+        sync_client = SequencedOpenAIClient([sync_body])
+
+        _, _, sync_usage = analysis_core.analyze_report(
+            **common,
+            use_batch=False,
+            client=sync_client,
+        )
+
+        request = sync_client.calls[0]
+        self.assertEqual(request["service_tier"], "fast")
+        self.assertEqual(request["reasoning"]["effort"], "medium")
+        record = sync_usage["usage_records"][0]
+        self.assertEqual(record["service_tier"], "default")
+        self.assertFalse(record["batch_priced"])
+
+        batch_client = FakeOpenAIClient(
+            [
+                json.dumps(
+                    {
+                        "custom_id": "framework-00-fw-a",
+                        "response": {
+                            "status_code": 200,
+                            "body": openai_response_body([item]),
+                        },
+                        "error": None,
+                    }
+                )
+            ]
+        )
+        _, _, batch_usage = analysis_core.analyze_report(
+            **common,
+            use_batch=True,
+            client=batch_client,
+        )
+
+        row = json.loads(batch_client.files.uploaded.decode("utf-8"))
+        self.assertNotIn("service_tier", row["body"])
+        self.assertEqual(row["body"]["reasoning"]["effort"], "medium")
+        batch_record = batch_usage["usage_records"][0]
+        self.assertTrue(batch_record["batch_priced"])
+        self.assertNotIn("service_tier", batch_record)
+
+    def test_superseded_models_are_priced_but_not_selectable(self):
+        selectable = {
+            *analysis_core.USER_SELECTABLE_MODELS,
+            *analysis_core.ANALYST_MODELS,
+            *analysis_core.REVIEWER_MODELS,
+            *analysis_core.SENIOR_REVIEWER_MODELS,
+        }
+        for model_id in (
+            analysis_core.LEGACY_LUNA_MODEL,
+            analysis_core.LEGACY_SOL_MODEL,
+            analysis_core.LEGACY_OPUS_MODEL,
+        ):
+            config = analysis_core.get_model_config(model_id)
+            self.assertTrue(config["legacy"])
+            self.assertNotIn(model_id, selectable)
+            cost, _ = analysis_core.estimate_usage_cost(
+                [{"model": model_id, "output_tokens": 1_000_000}]
+            )
+            self.assertAlmostEqual(cost, config["output_price"])
+        for model_id in selectable:
+            self.assertFalse(
+                analysis_core.get_model_config(model_id).get("legacy", False)
+            )
+
+    def test_every_model_has_a_documented_energy_basis(self):
+        for model_id, config in analysis_core.MODEL_CATALOG.items():
+            low, high = config["active_parameters_b"]
+            self.assertLess(0, low, model_id)
+            self.assertLessEqual(low, high, model_id)
+            self.assertIn("EcoLogits", config["parameter_source"])
+        energy = analysis_core.model_energy_per_1k_output_wh
+        self.assertAlmostEqual(
+            energy(analysis_core.HAIKU_MODEL), 0.1 + 0.003 * 350 ** 0.5
+        )
+        ordered = [
             analysis_core.HAIKU_MODEL,
             analysis_core.LUNA_MODEL,
+            analysis_core.SONNET_MODEL,
             analysis_core.TERRA_MODEL,
+            analysis_core.OPUS_MODEL,
+            analysis_core.SOL_MODEL,
+        ]
+        per_model = [energy(model_id) for model_id in ordered]
+        self.assertEqual(per_model, sorted(per_model))
+
+    def test_emissions_estimate_follows_tokens_context_and_fast_mode(self):
+        estimate = analysis_core.estimate_usage_emissions
+        haiku_wh = analysis_core.model_energy_per_1k_output_wh(
+            analysis_core.HAIKU_MODEL
         )
+
+        output_only = estimate(
+            [{"model": analysis_core.HAIKU_MODEL, "output_tokens": 1_000}]
+        )
+        self.assertAlmostEqual(output_only["energy_wh"], haiku_wh)
+        self.assertAlmostEqual(
+            output_only["co2e_g"], haiku_wh / 1000 * 349.7
+        )
+        self.assertAlmostEqual(
+            output_only["co2e_g_low"], output_only["co2e_g"] / 3
+        )
+        self.assertAlmostEqual(
+            output_only["co2e_g_high"], output_only["co2e_g"] * 3
+        )
+
+        # A cache read skips the prefill work that a fresh prompt token needs.
+        fresh = estimate(
+            [{"model": analysis_core.HAIKU_MODEL, "input_tokens": 100_000}]
+        )
+        cached = estimate(
+            [{"model": analysis_core.HAIKU_MODEL, "cache_read_tokens": 100_000}]
+        )
+        context_share = 100_000 / 272_000
+        self.assertAlmostEqual(
+            fresh["energy_wh"], haiku_wh * 100 * 0.2 * (1 + context_share)
+        )
+        self.assertAlmostEqual(cached["energy_wh"], haiku_wh * 100 * 0.02)
+
+        # At 272K prompt tokens, prompt energy doubles and output rises 50%.
+        long_context = estimate(
+            [
+                {
+                    "model": analysis_core.HAIKU_MODEL,
+                    "input_tokens": 272_000,
+                    "output_tokens": 1_000,
+                }
+            ]
+        )
+        self.assertAlmostEqual(
+            long_context["energy_wh"],
+            haiku_wh * (1.5 + 272 * 0.2 * 2.0),
+        )
+
+        sol_tokens = {
+            "model": analysis_core.SOL_MODEL,
+            "input_tokens": 5_000,
+            "cache_read_tokens": 60_000,
+            "output_tokens": 2_000,
+        }
+        fast = estimate([{**sol_tokens, "service_tier": "fast"}])
+        downgraded = estimate([{**sol_tokens, "service_tier": "default"}])
+        self.assertAlmostEqual(fast["energy_wh"], 2 * downgraded["energy_wh"])
+
+        self.assertEqual(
+            estimate([]),
+            {
+                "energy_wh": 0.0,
+                "co2e_g": 0.0,
+                "co2e_g_low": 0.0,
+                "co2e_g_high": 0.0,
+            },
+        )
+        with self.assertRaises(ValueError):
+            estimate([{"model": "unknown", "output_tokens": 1}])
+
+    def test_review_cascade_role_rules_reject_invalid_or_reused_models(self):
+        for senior_model in (analysis_core.SOL_MODEL, analysis_core.OPUS_MODEL):
+            analysis_core.validate_review_cascade_roles(
+                analysis_core.HAIKU_MODEL,
+                analysis_core.LUNA_MODEL,
+                senior_model,
+            )
         with self.assertRaisesRegex(
             ValueError, "analyst and reviewer must be different"
         ):
             analysis_core.validate_review_cascade_roles(
                 analysis_core.HAIKU_MODEL,
                 analysis_core.HAIKU_MODEL,
-                analysis_core.TERRA_MODEL,
+                analysis_core.SOL_MODEL,
             )
-        with self.assertRaisesRegex(
-            ValueError, "reviewer and senior reviewer must be different"
+        for former_senior in (
+            analysis_core.TERRA_MODEL,
+            analysis_core.SONNET_MODEL,
+            analysis_core.LEGACY_OPUS_MODEL,
+            analysis_core.LEGACY_SOL_MODEL,
         ):
-            analysis_core.validate_review_cascade_roles(
-                analysis_core.HAIKU_MODEL,
-                analysis_core.TERRA_MODEL,
-                analysis_core.TERRA_MODEL,
-            )
+            with self.assertRaisesRegex(
+                ValueError, "cannot be used as senior reviewer"
+            ):
+                analysis_core.validate_review_cascade_roles(
+                    analysis_core.HAIKU_MODEL,
+                    analysis_core.LUNA_MODEL,
+                    former_senior,
+                )
+        with patch.object(
+            analysis_core,
+            "SENIOR_REVIEWER_MODELS",
+            (*analysis_core.SENIOR_REVIEWER_MODELS, analysis_core.TERRA_MODEL),
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "reviewer and senior reviewer must be different"
+            ):
+                analysis_core.validate_review_cascade_roles(
+                    analysis_core.HAIKU_MODEL,
+                    analysis_core.TERRA_MODEL,
+                    analysis_core.TERRA_MODEL,
+                )
         with self.assertRaisesRegex(ValueError, "cannot be used as analyst"):
             analysis_core.validate_review_cascade_roles(
                 analysis_core.TERRA_MODEL,
@@ -1215,7 +1519,15 @@ class AnalysisCoreTests(unittest.TestCase):
         )
         self.assertEqual(
             [call["reasoning"]["effort"] for call in openai_client.calls],
-            ["medium", "medium", "high"],
+            ["medium", "medium", "medium"],
+        )
+        self.assertEqual(
+            [call.get("service_tier") for call in openai_client.calls],
+            [None, None, "fast"],
+        )
+        self.assertEqual(
+            [record.get("service_tier") for record in usage["usage_records"]],
+            [None, None, "fast"],
         )
         self.assertEqual(
             results[0]["role_models"],
@@ -1740,7 +2052,7 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(fallback_client.transports, ["stream"])
         self.assertTrue(fallback_client.streams[0].closed)
 
-    def test_review_cascade_agreement_skips_terra_and_includes_prior_rationale(self):
+    def test_review_cascade_agreement_skips_senior_and_includes_prior_rationale(self):
         haiku_client = SequencedAnthropicClient(
             [
                 message_for(
@@ -1828,7 +2140,7 @@ class AnalysisCoreTests(unittest.TestCase):
             {
                 "analyst": analysis_core.HAIKU_MODEL,
                 "reviewer": analysis_core.LUNA_MODEL,
-                "senior_reviewer": analysis_core.TERRA_MODEL,
+                "senior_reviewer": analysis_core.SOL_MODEL,
             },
         )
         self.assertEqual(
@@ -1863,7 +2175,7 @@ class AnalysisCoreTests(unittest.TestCase):
         )
         self.assertGreater(estimated_cost, 0)
 
-    def test_review_cascade_terra_gets_only_disagreement_and_joins_by_id(self):
+    def test_review_cascade_senior_gets_only_disagreement_and_joins_by_id(self):
         # Both providers deliberately return the requirements in a different
         # order. The merge must use stable identifiers, never list position.
         haiku_client = SequencedAnthropicClient(
@@ -1914,7 +2226,7 @@ class AnalysisCoreTests(unittest.TestCase):
                             "R0002",
                             analysis_core.CLASSIFICATION_PARTLY,
                             "high",
-                            "Terra adjudication for R2.",
+                            "Sol adjudication for R2.",
                         )
                     ],
                     input_tokens=300,
@@ -1944,15 +2256,17 @@ class AnalysisCoreTests(unittest.TestCase):
         )
 
         self.assertEqual(len(openai_client.calls), 2)
-        terra_request = openai_client.calls[1]
-        self.assertEqual(terra_request["model"], analysis_core.TERRA_MODEL)
-        self.assertEqual(terra_request["reasoning"]["effort"], "high")
-        terra_prompt = terra_request["input"][0]["content"][-1]["text"]
-        self.assertIn("R0002. [governance]", terra_prompt)
-        self.assertNotIn("R0001. [governance]", terra_prompt)
-        self.assertIn("Haiku rationale for R2.", terra_prompt)
-        self.assertIn("Luna rationale for R2.", terra_prompt)
-        self.assertNotIn("Luna rationale for R1.", terra_prompt)
+        senior_request = openai_client.calls[1]
+        self.assertEqual(senior_request["model"], analysis_core.SOL_MODEL)
+        self.assertEqual(senior_request["reasoning"]["effort"], "medium")
+        self.assertEqual(senior_request["service_tier"], "fast")
+        self.assertNotIn("service_tier", openai_client.calls[0])
+        senior_prompt = senior_request["input"][0]["content"][-1]["text"]
+        self.assertIn("R0002. [governance]", senior_prompt)
+        self.assertNotIn("R0001. [governance]", senior_prompt)
+        self.assertIn("Haiku rationale for R2.", senior_prompt)
+        self.assertIn("Luna rationale for R2.", senior_prompt)
+        self.assertNotIn("Luna rationale for R1.", senior_prompt)
 
         self.assertEqual(
             [result["requirement_id"] for result in results],
@@ -1966,7 +2280,7 @@ class AnalysisCoreTests(unittest.TestCase):
             by_id["R0001"]["cascade_status"], "analyst_reviewer_agree"
         )
         self.assertEqual(
-            by_id["R0002"]["rationale"], "Terra adjudication for R2."
+            by_id["R0002"]["rationale"], "Sol adjudication for R2."
         )
         self.assertEqual(by_id["R0002"]["confidence"], "medium")
         self.assertEqual(
@@ -2003,7 +2317,7 @@ class AnalysisCoreTests(unittest.TestCase):
             {
                 analysis_core.HAIKU_MODEL,
                 analysis_core.LUNA_MODEL,
-                analysis_core.TERRA_MODEL,
+                analysis_core.SOL_MODEL,
             },
         )
 
@@ -2040,7 +2354,7 @@ class AnalysisCoreTests(unittest.TestCase):
                             "R0001",
                             analysis_core.CLASSIFICATION_DOESNT,
                             "high",
-                            "Terra finds no meaningful evidence.",
+                            "Sol finds no meaningful evidence.",
                         )
                     ]
                 ),
@@ -2127,7 +2441,7 @@ class AnalysisCoreTests(unittest.TestCase):
             [analysis_core.LUNA_MODEL],
         )
 
-    def test_review_cascade_preflights_luna_and_terra_before_success(self):
+    def test_review_cascade_preflights_luna_and_sol_before_success(self):
         haiku_client = SequencedAnthropicClient(
             [
                 message_for(
@@ -2172,7 +2486,7 @@ class AnalysisCoreTests(unittest.TestCase):
 
         self.assertEqual(
             openai_client.model_checks,
-            [analysis_core.LUNA_MODEL, analysis_core.TERRA_MODEL],
+            [analysis_core.LUNA_MODEL, analysis_core.SOL_MODEL],
         )
         self.assertEqual(
             results[0]["cascade_status"], "analyst_reviewer_agree"
@@ -2517,7 +2831,7 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(summaries["FW A"]["scored_total"], 2)
         self.assertTrue(usage["cascade_complete"])
 
-    def test_review_cascade_keeps_successful_terra_framework_on_later_failure(self):
+    def test_review_cascade_keeps_successful_senior_framework_on_later_failure(self):
         haiku_client = SequencedAnthropicClient(
             [
                 message_for(
@@ -2570,12 +2884,12 @@ class AnalysisCoreTests(unittest.TestCase):
                             "R0001",
                             analysis_core.CLASSIFICATION_PARTLY,
                             "high",
-                            "Terra A sides with Luna.",
+                            "Sol A sides with Luna.",
                         )
                     ]
                 ),
-                ConnectionError("Terra B unavailable"),
-                ConnectionError("Terra B still unavailable"),
+                ConnectionError("Sol B unavailable"),
+                ConnectionError("Sol B still unavailable"),
             ]
         )
 
@@ -2813,7 +3127,7 @@ class AnalysisCoreTests(unittest.TestCase):
             1,
         )
 
-    def test_review_cascade_retains_partial_results_and_billed_terra_usage(self):
+    def test_review_cascade_retains_partial_results_and_billed_senior_usage(self):
         haiku_client = SequencedAnthropicClient(
             [
                 message_for(
@@ -2896,6 +3210,14 @@ class AnalysisCoreTests(unittest.TestCase):
                 "senior_reviewer",
                 "senior_reviewer",
             ],
+        )
+        self.assertEqual(
+            [
+                record.get("service_tier")
+                for record in usage["usage_records"]
+                if record["cascade_stage"] == "senior_reviewer"
+            ],
+            ["fast"] * 4,
         )
         self.assertEqual(summaries["FW A"]["scored_total"], 0)
         self.assertEqual(summaries["FW A"]["provisional"], 1)

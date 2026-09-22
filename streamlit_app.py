@@ -2,7 +2,7 @@
 Sustainability Framework Analyser - Streamlit App
 Deploy to Streamlit Cloud for free public access.
 
-Supports Claude Haiku 4.5 and OpenAI GPT-5.6 models for intelligent report
+Supports Anthropic Claude and OpenAI GPT models for intelligent report
 analysis against sustainability framework requirements.
 
 Requirements are loaded from ReportingFrameworks_v1.xlsx (in the project repo).
@@ -32,45 +32,77 @@ from startup_compat import import_module_with_exports
 _ANALYSIS_CORE_EXPORTS = (
     # Revision-specific marker: a cached older analysis module can have all the
     # ordinary exports below, so this unique name triggers a one-time reload.
-    "ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS",
+    "ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
+    "CACHED_PROMPT_TOKEN_ENERGY_RATIO",
+    "CONTEXT_ENERGY_REFERENCE_TOKENS",
+    "CONTEXT_OUTPUT_ENERGY_UPLIFT",
+    "CONTEXT_PROMPT_ENERGY_UPLIFT",
+    "EMISSIONS_UNCERTAINTY_FACTOR",
+    "ENERGY_WH_PER_1K_OUTPUT_BASE",
+    "ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS",
+    "FAST_MODE_ENERGY_MULTIPLIER",
+    "FAST_SERVICE_TIERS",
+    "GRID_CARBON_INTENSITY_G_PER_KWH",
     "HAIKU_MODEL",
+    "LEGACY_LUNA_MODEL",
     "LUNA_MODEL",
     "MODEL_CATALOG",
     "PRIMARY_MODEL",
+    "PROMPT_TOKEN_ENERGY_RATIO",
     "REVIEWER_MODELS",
     "SENIOR_REVIEWER_MODELS",
+    "SOL_MODEL",
     "TERRA_MODEL",
     "USER_SELECTABLE_MODELS",
     "analyze_report",
     "analyze_report_with_review_cascade",
     "estimate_usage_cost",
+    "estimate_usage_emissions",
     "extract_pdf_pages",
     "format_report_text",
     "get_model_config",
+    "model_energy_per_1k_output_wh",
     "model_picker_label",
+    "requested_price_multiplier",
 )
 import_module_with_exports("analysis_core", _ANALYSIS_CORE_EXPORTS)
 
 from analysis_core import (
     ANALYST_MODELS,
     AnalysisAuthenticationError,
+    CACHED_PROMPT_TOKEN_ENERGY_RATIO,
+    CONTEXT_ENERGY_REFERENCE_TOKENS,
+    CONTEXT_OUTPUT_ENERGY_UPLIFT,
+    CONTEXT_PROMPT_ENERGY_UPLIFT,
+    EMISSIONS_UNCERTAINTY_FACTOR,
+    ENERGY_WH_PER_1K_OUTPUT_BASE,
+    ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS,
+    FAST_MODE_ENERGY_MULTIPLIER,
+    FAST_SERVICE_TIERS,
+    GRID_CARBON_INTENSITY_G_PER_KWH,
     HAIKU_MODEL,
+    LEGACY_LUNA_MODEL,
     LUNA_MODEL,
     MODEL_CATALOG,
     PRIMARY_MODEL,
+    PROMPT_TOKEN_ENERGY_RATIO,
     REVIEWER_MODELS,
     SENIOR_REVIEWER_MODELS,
+    SOL_MODEL,
     TERRA_MODEL,
     USER_SELECTABLE_MODELS,
     analyze_report,
     analyze_report_with_review_cascade,
     estimate_usage_cost,
+    estimate_usage_emissions,
     extract_pdf_pages,
     format_report_text,
     get_model_config,
+    model_energy_per_1k_output_wh,
     model_picker_label,
+    requested_price_multiplier,
 )
 
 # Page config
@@ -620,7 +652,7 @@ def run_review_cascade(
     report_pages=None,
     analyst_model_id=HAIKU_MODEL,
     reviewer_model_id=LUNA_MODEL,
-    senior_reviewer_model_id=TERRA_MODEL,
+    senior_reviewer_model_id=SOL_MODEL,
 ):
     """Run the selected three-role review cascade using standard calls."""
 
@@ -682,13 +714,30 @@ def render_model_api_key(model_id, widget_key):
 
 
 def render_model_price_caption(model_id):
-    """Show standard, cached, and batch list prices next to the picker."""
+    """Show the list prices that apply to the selected model."""
     model = get_model_config(model_id)
     long_context_note = (
         " Inputs above 272K tokens use higher long-context rates."
         if model.get("long_context_threshold")
         else ""
     )
+    multiplier = requested_price_multiplier(model_id)
+    if multiplier != 1.0:
+        effort = model.get("reasoning_effort")
+        effort_note = f" at {effort} reasoning effort" if effort else ""
+        st.caption(
+            f"{model['description']}. Runs in Fast mode{effort_note}. USD "
+            "per 1M tokens — Fast mode: "
+            f"${model['input_price'] * multiplier:g} input / "
+            f"${model['output_price'] * multiplier:g} output; cache read / "
+            f"write: ${model['cached_input_price'] * multiplier:g} / "
+            f"${model['cache_write_price'] * multiplier:g}. That is "
+            f"{multiplier:g}× the standard ${model['input_price']:g} / "
+            f"${model['output_price']:g}; requests the provider downgrades "
+            "to standard processing are billed at standard rates. Vision "
+            f"and reasoning change token usage.{long_context_note}"
+        )
+        return
     st.caption(
         f"{model['description']}. USD per 1M tokens — standard: "
         f"${model['input_price']:g} input / ${model['output_price']:g} "
@@ -698,6 +747,97 @@ def render_model_price_caption(model_id):
         f"${model['batch_output_price']:g} output. Vision and reasoning "
         f"change token usage.{long_context_note}"
     )
+
+
+def format_estimate(value):
+    """Round an estimate without implying more precision than it has."""
+    if value < 0.01:
+        return "<0.01"
+    if value >= 10:
+        return f"{value:,.0f}"
+    return f"{value:.2g}"
+
+
+def emissions_summary_html(emissions):
+    """Return the one-line CO2e estimate shown beside a run's cost."""
+    return (
+        "<strong>Estimated emissions:</strong> "
+        f"~{format_estimate(emissions['co2e_g'])} g CO<sub>2</sub>e "
+        f"(plausible range {format_estimate(emissions['co2e_g_low'])}–"
+        f"{format_estimate(emissions['co2e_g_high'])} g) from "
+        f"~{format_estimate(emissions['energy_wh'])} Wh of electricity"
+    )
+
+
+def render_estimate_methodology(model_ids):
+    """Explain how run costs and CO2e are estimated for the given models."""
+    with st.expander("How the cost and CO2 estimates are calculated"):
+        st.markdown(
+            "**Cost.** Each provider reports the tokens it billed for every "
+            "request. The app prices them at the list prices in its model "
+            "catalogue (22 September 2026), including prompt-cache read and "
+            "write rates, the 50% Batch API discount, OpenAI's higher rates "
+            "for prompts above 272K tokens, and 2× Fast mode rates for "
+            "requests that OpenAI reports it served in Fast mode.\n\n"
+            "**CO2.** The estimate covers the electricity used to serve this "
+            "run's requests, on a location-based basis. Model training, "
+            "hardware manufacturing and water use are excluded. Providers do "
+            "not publish per-model energy data, so the steps below rely on "
+            "published research:\n"
+            "- **Electricity per output token** is "
+            f"{ENERGY_WH_PER_1K_OUTPUT_BASE:g} Wh + "
+            f"{ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS:g} Wh per "
+            "billion active parameters, for every 1,000 tokens. This line is "
+            "fitted to the Oviedo et al. (Joule, 2026) estimates for "
+            "production serving, which include whole-server power and "
+            "data-centre overhead. Active-parameter ranges come from "
+            "EcoLogits, taking the geometric midpoint of each range.\n"
+            f"- **Prompt tokens** count as {PROMPT_TOKEN_ENERGY_RATIO:g} of an "
+            "output token, because they are processed in parallel. **Cache "
+            "reads** count as "
+            f"{PROMPT_TOKEN_ENERGY_RATIO * CACHED_PROMPT_TOKEN_ENERGY_RATIO:g}"
+            ", because they skip recomputation. Energy per token rises with "
+            f"prompt length, reaching +{CONTEXT_PROMPT_ENERGY_UPLIFT:.0%} for "
+            f"prompt tokens and +{CONTEXT_OUTPUT_ENERGY_UPLIFT:.0%} for output "
+            f"tokens at {CONTEXT_ENERGY_REFERENCE_TOKENS // 1000}K tokens.\n"
+            f"- **Fast mode** requests count {FAST_MODE_ENERGY_MULTIPLIER:g}× "
+            "(a conservative assumption: Fast mode buys extra accelerator "
+            "time per token). Batch requests use the standard factors.\n"
+            "- **Electricity is converted** at "
+            f"{GRID_CARBON_INTENSITY_G_PER_KWH:g} g CO2e/kWh, the US average "
+            "grid intensity in EPA eGRID2023.\n"
+            "- **The plausible range** divides and multiplies the central "
+            f"figure by {EMISSIONS_UNCERTAINTY_FACTOR:g}. It reflects "
+            "uncertainty in model size, hardware generation, idle capacity "
+            "and data-centre location."
+        )
+        factor_rows = []
+        for model_id in dict.fromkeys(model_ids):
+            try:
+                model = get_model_config(model_id)
+            except ValueError:
+                continue
+            low, high = model["active_parameters_b"]
+            factor_rows.append(
+                {
+                    "Model": model["label"],
+                    "Active parameters (billions)": f"{low:g}–{high:g}",
+                    "Wh per 1,000 output tokens": round(
+                        model_energy_per_1k_output_wh(model_id), 3
+                    ),
+                    "Parameter source": model["parameter_source"],
+                }
+            )
+        if factor_rows:
+            st.dataframe(pd.DataFrame(factor_rows), hide_index=True)
+        st.caption(
+            "Sources: Oviedo et al. (2026), Energy use of AI inference, "
+            "efficiency pathways, and test-time scaling, Joule "
+            "([arXiv:2509.20241](https://arxiv.org/abs/2509.20241)); "
+            "[EcoLogits](https://ecologits.ai) model parameter estimates; "
+            "[EPA eGRID2023](https://www.epa.gov/egrid/summary-data) US "
+            "total output emission rate (770.9 lb CO2e/MWh)."
+        )
 
 
 ANALYSIS_STRATEGY_SINGLE = "Single model"
@@ -745,9 +885,10 @@ def cascade_role_model(result, role):
     role_models = result.get("role_models", {})
     if isinstance(role_models, dict) and role_models.get(role):
         return role_models[role]
+    # Runs from before configurable roles always used this fixed cascade.
     legacy_models = {
         "analyst": HAIKU_MODEL,
-        "reviewer": LUNA_MODEL,
+        "reviewer": LEGACY_LUNA_MODEL,
         "senior_reviewer": TERRA_MODEL,
     }
     return legacy_models[role]
@@ -1983,13 +2124,14 @@ def main():
             (
                 "Pick the model, then paste the matching API key",
                 "In Single model mode you choose one of Claude Haiku 4.5, "
-                "GPT-5.6 Luna or GPT-5.6 Terra, and the app shows that "
+                "GPT-6 Luna or GPT-5.6 Terra, and the app shows that "
                 "model's price per million tokens. In cascade mode you "
                 "choose all three roles instead. The key box that appears "
                 "matches whichever provider you selected.",
-                "Haiku 4.5 or Luna — both are the cheap tier and are the "
-                "right default. Terra costs roughly 2.5× more per input "
-                "token, so save it for a document you already know is hard.",
+                "Haiku 4.5 or GPT-6 Luna — both are the cheap tier and are "
+                "the right default, and Luna is the cheapest. Terra costs 2× "
+                "Haiku and 20× Luna per input token, so save it for a "
+                "document you already know is hard.",
             ),
             (
                 "Choose the frameworks to assess against",
@@ -2030,8 +2172,8 @@ def main():
                 "one framework, and either a PDF or pasted text. You get a "
                 "coverage bar per framework, the detailed findings with "
                 "supporting extracts, a human-review queue, a gap analysis, "
-                "an Excel export, and a cost summary of what the run "
-                "actually charged.",
+                "an Excel export, and a summary of what the run actually "
+                "charged and its estimated CO2 emissions.",
                 "Start with the human-review queue and the gap analysis — "
                 "between them they hold everything the app is either unsure "
                 "about or says you're missing. Then open the detailed "
@@ -2119,17 +2261,18 @@ def main():
                 "choose the reviewed cascade, three roles run in sequence:"
             )
             st.markdown(
-                "**1. Analyst** — Haiku 4.5 or Luna reads your report and "
-                "gives every requirement a classification, evidence and a "
-                "confidence flag.\n\n"
-                "**2. Reviewer** — a *different* model (Luna, Haiku, Terra "
-                "or Sonnet 5) independently checks each of those verdicts, "
-                "including the evidence and reasoning behind them. The app "
-                "will not let the same model be both analyst and reviewer.\n\n"
-                "**3. Senior reviewer** — Terra, Sonnet 5, Opus 5 or Sol is "
-                "called **only** where the analyst and reviewer disagreed, "
-                "and adjudicates. You are only charged for it on those "
-                "items."
+                "**1. Analyst** — Haiku 4.5 or GPT-6 Luna reads your report "
+                "and gives every requirement a classification, evidence and "
+                "a confidence flag.\n\n"
+                "**2. Reviewer** — a *different* model (GPT-6 Luna, Haiku, "
+                "GPT-5.6 Terra or Sonnet 5) independently checks each of "
+                "those verdicts, including the evidence and reasoning behind "
+                "them. The app will not let the same model be both analyst "
+                "and reviewer.\n\n"
+                "**3. Senior reviewer** — GPT-6 Sol (Fast mode, medium "
+                "effort) or Claude Opus 5.5 is called **only** where the "
+                "analyst and reviewer disagreed, and adjudicates. You are "
+                "only charged for it on those items."
             )
             st.markdown(
                 "The point is that the disagreements become visible rather "
@@ -2625,9 +2768,17 @@ def main():
             if pending_analysis
             else PRIMARY_MODEL
         )
-        if pending_model_id not in USER_SELECTABLE_MODELS:
+        # A batch submitted before a model upgrade must still resume with the
+        # superseded model that created it, so only unknown IDs fall back.
+        if pending_model_id not in MODEL_CATALOG:
             pending_model_id = PRIMARY_MODEL
+        single_model_options = USER_SELECTABLE_MODELS
         if pending_batch_id:
+            if pending_model_id not in single_model_options:
+                single_model_options = (
+                    *USER_SELECTABLE_MODELS,
+                    pending_model_id,
+                )
             st.session_state["analysis_model_id"] = pending_model_id
             st.session_state["analysis_strategy"] = ANALYSIS_STRATEGY_SINGLE
 
@@ -2669,6 +2820,13 @@ def main():
             required_cascade_providers = set()
 
             if is_review_cascade:
+                # Streamlit keeps a stale selection that is no longer an
+                # option, so drop superseded models before rendering.
+                if (
+                    st.session_state.get("cascade_analyst_model_id")
+                    not in ANALYST_MODELS
+                ):
+                    st.session_state.pop("cascade_analyst_model_id", None)
                 analyst_model_id = st.selectbox(
                     "Analyst",
                     options=ANALYST_MODELS,
@@ -2711,8 +2869,8 @@ def main():
                     not in available_senior_reviewers
                 ):
                     st.session_state["cascade_senior_reviewer_model_id"] = (
-                        TERRA_MODEL
-                        if TERRA_MODEL in available_senior_reviewers
+                        SOL_MODEL
+                        if SOL_MODEL in available_senior_reviewers
                         else available_senior_reviewers[0]
                     )
                 senior_reviewer_model_id = st.selectbox(
@@ -2741,6 +2899,16 @@ def main():
                 senior_label = get_model_config(
                     senior_reviewer_model_id
                 )["label"]
+                senior_multiplier = requested_price_multiplier(
+                    senior_reviewer_model_id
+                )
+                pricing_note = (
+                    "Sequential review uses standard API pricing, except "
+                    f"{senior_label}, which runs in Fast mode at "
+                    f"{senior_multiplier:g}× its standard rates."
+                    if senior_multiplier != 1.0
+                    else "Sequential review uses standard API pricing."
+                )
                 st.warning(
                     "**Reviewed cascade is slower and costlier.** "
                     f"{analyst_label} and {reviewer_label} run for every "
@@ -2748,7 +2916,7 @@ def main():
                     "classifications disagree. If the reviewer returns no "
                     "verdict, that item is provisional and the senior reviewer "
                     "is not called. The same model cannot occupy adjacent "
-                    "roles. Sequential review uses standard API pricing."
+                    f"roles. {pricing_note}"
                 )
                 st.markdown("**Required credentials**")
                 if "anthropic" in required_cascade_providers:
@@ -2780,9 +2948,14 @@ def main():
                     )
                     render_model_price_caption(senior_reviewer_model_id)
             else:
+                if (
+                    st.session_state.get("analysis_model_id")
+                    not in single_model_options
+                ):
+                    st.session_state.pop("analysis_model_id", None)
                 selected_model_id = st.selectbox(
                     "Analysis model",
-                    options=USER_SELECTABLE_MODELS,
+                    options=single_model_options,
                     index=0,
                     format_func=model_picker_label,
                     key="analysis_model_id",
@@ -3506,7 +3679,7 @@ def main():
                         "confirms them."
                     )
 
-            # Cost estimate
+            # Cost and emissions estimates
             if token_usage:
                 models_used = token_usage.get('models_used', set())
                 usage_records = token_usage.get("usage_records", [])
@@ -3514,6 +3687,7 @@ def main():
                     total_cost, cache_savings = estimate_usage_cost(
                         usage_records
                     )
+                    emissions = estimate_usage_emissions(usage_records)
                     model_label = " + ".join(
                         get_model_config(model_id)["label"]
                         for model_id in sorted(models_used)
@@ -3524,7 +3698,8 @@ def main():
                         model_label = f"Reviewed cascade ({model_label})"
                 except ValueError as error:
                     st.warning(
-                        f"Could not estimate this saved run's cost: {error}"
+                        "Could not estimate this saved run's cost and "
+                        f"emissions: {error}"
                     )
                 else:
                     itok = (
@@ -3544,6 +3719,28 @@ def main():
                             for record in usage_records
                         ) else ""
                     )
+                    fast_mode_records = [
+                        record for record in usage_records
+                        if requested_price_multiplier(
+                            record.get("model", "")
+                        ) != 1.0
+                    ]
+                    fast_served = sum(
+                        record.get("service_tier") in FAST_SERVICE_TIERS
+                        for record in fast_mode_records
+                    )
+                    fast_str = ""
+                    if fast_mode_records:
+                        fast_str = (
+                            f" \u00b7 Fast mode pricing applied to "
+                            f"{fast_served} of {len(fast_mode_records)} "
+                            "Fast mode request(s)"
+                        )
+                        if fast_served < len(fast_mode_records):
+                            fast_str += (
+                                "; the rest were served and billed at "
+                                "standard rates"
+                            )
                     st.markdown(
                         f'<div style="background:#EDE7D8;border:1px solid '
                         f'#DDD5C2;border-radius:8px;padding:12px;'
@@ -3551,9 +3748,13 @@ def main():
                         f'<strong>Model:</strong> {model_label} \u00b7 '
                         f'<strong>Estimated cost:</strong> ${total_cost:.4f} '
                         f'({itok:,} input / {otok:,} output tokens)'
-                        f'{cache_str}{batch_str}'
+                        f'{cache_str}{batch_str}{fast_str}<br>'
+                        f'{emissions_summary_html(emissions)}'
                         f'</div>',
                         unsafe_allow_html=True
+                    )
+                    render_estimate_methodology(
+                        record.get("model", "") for record in usage_records
                     )
 
             # Highest-value review queue: uncertain verdicts are surfaced
@@ -3812,6 +4013,8 @@ def main():
             "progress or comparing two firms' disclosures."
         )
 
+        if st.session_state.get("cmp_model_id") not in USER_SELECTABLE_MODELS:
+            st.session_state.pop("cmp_model_id", None)
         cmp_model_id = st.selectbox(
             "Comparison model",
             options=USER_SELECTABLE_MODELS,
@@ -4053,18 +4256,30 @@ def main():
             st.subheader("Comparison Results")
 
             if usage_a and usage_b:
-                cost_a, _ = estimate_usage_cost(
-                    usage_a.get("usage_records", [])
-                )
-                cost_b, _ = estimate_usage_cost(
-                    usage_b.get("usage_records", [])
+                records_a = usage_a.get("usage_records", [])
+                records_b = usage_b.get("usage_records", [])
+                cost_a, _ = estimate_usage_cost(records_a)
+                cost_b, _ = estimate_usage_cost(records_b)
+                emissions_a = estimate_usage_emissions(records_a)
+                emissions_b = estimate_usage_emissions(records_b)
+                combined_emissions = estimate_usage_emissions(
+                    [*records_a, *records_b]
                 )
                 model_label = get_model_config(model_id_used)["label"]
                 st.info(
                     f"{model_label} estimated cost — {name_a}: "
                     f"${cost_a:.4f}; {name_b}: ${cost_b:.4f}; combined: "
-                    f"${cost_a + cost_b:.4f}. Standard API pricing applied."
+                    f"${cost_a + cost_b:.4f}. Standard API pricing applied. "
+                    "Estimated emissions — "
+                    f"{name_a}: ~{format_estimate(emissions_a['co2e_g'])} g "
+                    f"CO2e; {name_b}: ~{format_estimate(emissions_b['co2e_g'])} "
+                    "g CO2e; combined: "
+                    f"~{format_estimate(combined_emissions['co2e_g'])} g CO2e "
+                    "(plausible range "
+                    f"{format_estimate(combined_emissions['co2e_g_low'])}–"
+                    f"{format_estimate(combined_emissions['co2e_g_high'])} g)."
                 )
+                render_estimate_methodology([model_id_used])
 
             st.markdown(
                 '<div style="background:#EDE7D8;border:1px solid #DDD5C2;'
