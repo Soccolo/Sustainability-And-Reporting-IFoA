@@ -135,6 +135,9 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "batch_output_price": 2.5,
         "description": "Fast, low-cost Claude model",
         "secret_name": "ANTHROPIC_API_KEY",
+        # The default temperature of 1.0 made verdicts vary between runs.
+        # Haiku runs without extended thinking, so the API accepts 0.
+        "temperature": 0.0,
         "active_parameters_b": (10, 35),
         "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
     },
@@ -1391,6 +1394,8 @@ def _analyze_report_with_anthropic(
             }
             if model.get("adaptive_thinking"):
                 request_params["thinking"] = {"type": "adaptive"}
+            elif "temperature" in model:
+                request_params["temperature"] = model["temperature"]
             if structured_output:
                 request_params["output_config"] = _anthropic_output_config(
                     reasoning_effort
