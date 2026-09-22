@@ -2353,18 +2353,6 @@ def _index_unambiguous_cascade_results(
     )
 
 
-def _cascade_review_contexts(
-    indexed_results: dict[tuple[str, str], dict[str, Any]],
-    model_name: str,
-) -> dict[str, dict[str, Any]]:
-    contexts: dict[str, dict[str, Any]] = {}
-    for (framework, requirement_id), result in indexed_results.items():
-        contexts.setdefault(framework, {})[requirement_id] = {
-            model_name: _cascade_verdict_snapshot(result)
-        }
-    return contexts
-
-
 def _aggregate_cascade_usage(
     stages: Iterable[tuple[str, dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -2899,25 +2887,24 @@ def analyze_report_with_review_cascade(
             status_callback(
                 "info",
                 f"Cascade stage 2/3: {reviewer_label} is independently "
-                f"reviewing every {analyst_label} verdict.",
+                "assessing every requirement without seeing the "
+                f"{analyst_label} verdict.",
             )
+        # The reviewer is blind: it never sees the analyst's verdict,
+        # evidence or rationale, so agreement is independent confirmation
+        # rather than anchoring. Disagreements go to the senior reviewer.
         luna_instruction = (
-            "For each requirement, first assess the report evidence independently "
-            "without relying on the prior verdict. Only after reaching an "
-            f"independent view, audit the supplied {analyst_label} record and "
-            "correct it if necessary. Return your own final verdict in the "
-            "required schema."
+            "Assess each requirement independently from the report evidence "
+            "and return your own verdict in the required schema."
         )
         luna_usage: dict[str, Any] = {}
         luna_results_buffer: list[dict[str, Any]] = []
         luna_stage_errors: list[Exception] = []
         luna_retry_count = 0
-        reviewer_contexts = _cascade_review_contexts(haiku_index, "analyst")
         try:
             run_stage(
                 reviewer_model_id,
                 progress=stage_progress(0.4, 0.4),
-                review_contexts=reviewer_contexts,
                 review_instruction=luna_instruction,
                 reasoning_effort="medium",
                 max_requirements_per_request=4,
@@ -2956,7 +2943,6 @@ def analyze_report_with_review_cascade(
                     reviewer_model_id,
                     progress=None,
                     requirement_filters=retry_filters,
-                    review_contexts=reviewer_contexts,
                     review_instruction=luna_instruction,
                     reasoning_effort="medium",
                     max_requirements_per_request=4,

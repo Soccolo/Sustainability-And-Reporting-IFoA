@@ -951,9 +951,14 @@ class AnalysisCoreTests(unittest.TestCase):
             anthropic_client.calls[2]["output_config"]["format"]["schema"],
             anthropic_client.calls[1]["output_config"]["format"]["schema"],
         )
-        self.assertIn(
+        # The reviewer is blind; only the senior reviewer sees prior records.
+        self.assertNotIn(
             '"analyst"',
             anthropic_client.calls[1]["messages"][0]["content"][-1]["text"],
+        )
+        self.assertIn(
+            '"analyst"',
+            anthropic_client.calls[2]["messages"][0]["content"][-1]["text"],
         )
         self.assertIn(
             '"reviewer"',
@@ -2111,16 +2116,15 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(luna_request["model"], analysis_core.LUNA_MODEL)
         self.assertEqual(luna_request["reasoning"]["effort"], "medium")
         luna_prompt = luna_request["input"][0]["content"][-1]["text"]
+        # The reviewer is blind to the analyst's record.
         self.assertIn(
-            "first assess the report evidence independently", luna_prompt
+            "Assess each requirement independently", luna_prompt
         )
-        self.assertIn(
-            "audit the supplied Claude Haiku 4.5 record", luna_prompt
-        )
-        self.assertIn(
+        self.assertNotIn("PRIOR MODEL RECORDS", luna_prompt)
+        self.assertNotIn(
             "Haiku rationale carried into the audit.", luna_prompt
         )
-        self.assertIn(
+        self.assertNotIn(
             "Haiku sees one interpretive boundary.", luna_prompt
         )
 
