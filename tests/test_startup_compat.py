@@ -9,7 +9,7 @@ import startup_compat
 
 class StartupCompatibilityTests(unittest.TestCase):
     def test_streamlit_requires_the_current_analysis_revision_marker(self):
-        marker = "ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS"
+        marker = "ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS"
         source = (
             Path(__file__).resolve().parents[1] / "streamlit_app.py"
         ).read_text(encoding="utf-8")
@@ -87,7 +87,7 @@ class StartupCompatibilityTests(unittest.TestCase):
         stale = SimpleNamespace(analyze_report=object())
         refreshed = SimpleNamespace(
             analyze_report=object(),
-            ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS=True,
+            ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS=True,
         )
 
         with (
@@ -110,13 +110,13 @@ class StartupCompatibilityTests(unittest.TestCase):
                 "analysis_core",
                 (
                     "analyze_report",
-                    "ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS",
+                    "ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS",
                 ),
             )
 
         self.assertIs(resolved, refreshed)
         self.assertTrue(
-            resolved.ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS
+            resolved.ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS
         )
         invalidate_caches.assert_called_once_with()
         reload_module.assert_called_once_with(stale)

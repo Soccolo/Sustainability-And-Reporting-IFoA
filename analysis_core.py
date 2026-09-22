@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import re
 import time
 from io import BytesIO
@@ -72,7 +73,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20260725_STREAMING_REVIEWS = True
+ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -95,17 +96,33 @@ class AnalysisProviderStreamError(RuntimeError):
 
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
-LUNA_MODEL = "gpt-5.6-luna"
+LUNA_MODEL = "gpt-6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
 SONNET_MODEL = "claude-sonnet-5"
-OPUS_MODEL = "claude-opus-5"
-SOL_MODEL = "gpt-5.6-sol"
+OPUS_MODEL = "claude-opus-5-5"
+SOL_MODEL = "gpt-6-sol"
 PRIMARY_MODEL = HAIKU_MODEL
+# Superseded models are no longer selectable. They stay priced so results and
+# pending batches created before an upgrade can still be costed and resumed.
+LEGACY_LUNA_MODEL = "gpt-5.6-luna"
+LEGACY_SOL_MODEL = "gpt-5.6-sol"
+LEGACY_OPUS_MODEL = "claude-opus-5"
 
-# One catalogue drives the picker, request routing, and cost estimates. Prices
-# are USD per million tokens and reflect first-party API list prices on
-# 2026-07-24. Both providers apply a 50% Batch API discount. Sonnet 5 uses
-# Anthropic's introductory pricing through 2026-08-31.
+_OPENAI_LONG_CONTEXT_PRICING = {
+    # Prompts above 272K tokens cost 2x for input and cache tokens and 1.5x
+    # for output tokens, for the full request.
+    "long_context_threshold": 272_000,
+    "long_input_multiplier": 2.0,
+    "long_output_multiplier": 1.5,
+}
+
+# One catalogue drives the pickers, request routing, and cost and emissions
+# estimates. Prices are USD per million tokens and reflect first-party API list
+# prices on 2026-09-22. Both providers apply a 50% Batch API discount. GPT-6 Sol
+# is requested in OpenAI Fast mode, which is billed at twice the standard rates.
+# active_parameters_b is EcoLogits' published range of active parameters in
+# billions. Models EcoLogits has not yet estimated use their direct
+# predecessor's range as a proxy, as recorded in parameter_source.
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
     HAIKU_MODEL: {
         "label": "Claude Haiku 4.5",
@@ -116,38 +133,45 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "output_price": 5.0,
         "batch_input_price": 0.5,
         "batch_output_price": 2.5,
-        "description": "Fastest option and lowest output-token cost",
+        "description": "Fast, low-cost Claude model",
         "secret_name": "ANTHROPIC_API_KEY",
+        "active_parameters_b": (10, 35),
+        "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
     },
     LUNA_MODEL: {
-        "label": "GPT-5.6 Luna",
+        "label": "GPT-6 Luna",
         "provider": "openai",
-        "input_price": 1.0,
-        "cached_input_price": 0.1,
-        "cache_write_price": 1.25,
-        "output_price": 6.0,
-        "batch_input_price": 0.5,
-        "batch_output_price": 3.0,
-        "description": "Economical GPT-5.6 reasoning for high-volume analysis",
+        "input_price": 0.1,
+        "cached_input_price": 0.01,
+        "cache_write_price": 0.125,
+        "output_price": 0.5,
+        "batch_input_price": 0.05,
+        "batch_output_price": 0.25,
+        "description": (
+            "Lowest-cost option; OpenAI's most efficient GPT-6 model for "
+            "high-volume analysis"
+        ),
         "secret_name": "OPENAI_API_KEY",
-        "long_context_threshold": 272_000,
-        "long_input_multiplier": 2.0,
-        "long_output_multiplier": 1.5,
+        **_OPENAI_LONG_CONTEXT_PRICING,
+        "active_parameters_b": (18, 60),
+        "parameter_source": (
+            "EcoLogits estimate for GPT-5.6 Luna, used as a proxy for GPT-6 Luna"
+        ),
     },
     TERRA_MODEL: {
         "label": "GPT-5.6 Terra",
         "provider": "openai",
-        "input_price": 2.5,
-        "cached_input_price": 0.25,
-        "cache_write_price": 3.125,
-        "output_price": 15.0,
-        "batch_input_price": 1.25,
-        "batch_output_price": 7.5,
+        "input_price": 2.0,
+        "cached_input_price": 0.2,
+        "cache_write_price": 2.5,
+        "output_price": 12.0,
+        "batch_input_price": 1.0,
+        "batch_output_price": 6.0,
         "description": "Higher-capability GPT-5.6 analysis at a higher cost",
         "secret_name": "OPENAI_API_KEY",
-        "long_context_threshold": 272_000,
-        "long_input_multiplier": 2.0,
-        "long_output_multiplier": 1.5,
+        **_OPENAI_LONG_CONTEXT_PRICING,
+        "active_parameters_b": (45, 150),
+        "parameter_source": "EcoLogits estimate for GPT-5.6 Terra",
     },
     SONNET_MODEL: {
         "label": "Claude Sonnet 5",
@@ -158,16 +182,91 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "output_price": 10.0,
         "batch_input_price": 1.0,
         "batch_output_price": 5.0,
-        "description": (
-            "High-capability Claude model; introductory pricing through "
-            "31 August 2026"
-        ),
+        "description": "High-capability Claude model",
         "secret_name": "ANTHROPIC_API_KEY",
         "adaptive_thinking": True,
         "structured_output": True,
         "review_max_tokens": 64_000,
+        "active_parameters_b": (29, 88),
+        "parameter_source": "EcoLogits estimate for Claude Sonnet 5",
     },
     OPUS_MODEL: {
+        "label": "Claude Opus 5.5",
+        "provider": "anthropic",
+        "input_price": 4.0,
+        # Opus 5.5 cache hits cost 0.05x input rather than the usual 0.1x.
+        "cached_input_price": 0.2,
+        "cache_write_price": 5.0,
+        "output_price": 20.0,
+        "batch_input_price": 2.0,
+        "batch_output_price": 10.0,
+        "description": "Frontier Claude Opus model for demanding senior review",
+        "secret_name": "ANTHROPIC_API_KEY",
+        "adaptive_thinking": True,
+        "structured_output": True,
+        "review_max_tokens": 96_000,
+        "active_parameters_b": (67, 200),
+        "parameter_source": (
+            "EcoLogits estimate for Claude Opus 5, used as a proxy for "
+            "Claude Opus 5.5"
+        ),
+    },
+    SOL_MODEL: {
+        "label": "GPT-6 Sol",
+        "provider": "openai",
+        "input_price": 2.0,
+        "cached_input_price": 0.2,
+        "cache_write_price": 2.5,
+        "output_price": 10.0,
+        "batch_input_price": 1.0,
+        "batch_output_price": 5.0,
+        "description": "Flagship GPT-6 model for complex senior review",
+        "secret_name": "OPENAI_API_KEY",
+        **_OPENAI_LONG_CONTEXT_PRICING,
+        # Always requested in Fast mode at medium effort. OpenAI bills Fast
+        # mode at twice the standard rates, but downgrades some requests to
+        # standard processing under ramp limits and then bills them normally.
+        "service_tier": "fast",
+        "fast_price_multiplier": 2.0,
+        "reasoning_effort": "medium",
+        "active_parameters_b": (90, 300),
+        "parameter_source": (
+            "EcoLogits estimate for GPT-5.6 Sol, used as a proxy for GPT-6 Sol"
+        ),
+    },
+    LEGACY_LUNA_MODEL: {
+        "label": "GPT-5.6 Luna",
+        "provider": "openai",
+        "input_price": 0.2,
+        "cached_input_price": 0.02,
+        "cache_write_price": 0.25,
+        "output_price": 1.2,
+        "batch_input_price": 0.1,
+        "batch_output_price": 0.6,
+        "description": "Superseded by GPT-6 Luna",
+        "secret_name": "OPENAI_API_KEY",
+        **_OPENAI_LONG_CONTEXT_PRICING,
+        "active_parameters_b": (18, 60),
+        "parameter_source": "EcoLogits estimate for GPT-5.6 Luna",
+        "legacy": True,
+    },
+    LEGACY_SOL_MODEL: {
+        "label": "GPT-5.6 Sol",
+        "provider": "openai",
+        "input_price": 4.0,
+        "cached_input_price": 0.4,
+        "cache_write_price": 5.0,
+        "output_price": 20.0,
+        "batch_input_price": 2.0,
+        "batch_output_price": 10.0,
+        "description": "Superseded by GPT-6 Sol",
+        "secret_name": "OPENAI_API_KEY",
+        **_OPENAI_LONG_CONTEXT_PRICING,
+        "active_parameters_b": (90, 300),
+        "parameter_source": "EcoLogits estimate for GPT-5.6 Sol",
+        "legacy": True,
+    },
+    LEGACY_OPUS_MODEL: {
         "label": "Claude Opus 5",
         "provider": "anthropic",
         "input_price": 5.0,
@@ -176,41 +275,55 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "output_price": 25.0,
         "batch_input_price": 2.5,
         "batch_output_price": 12.5,
-        "description": "Frontier Opus model for demanding senior review",
+        "description": "Superseded by Claude Opus 5.5",
         "secret_name": "ANTHROPIC_API_KEY",
         "adaptive_thinking": True,
         "structured_output": True,
         "review_max_tokens": 96_000,
-    },
-    SOL_MODEL: {
-        "label": "GPT-5.6 Sol",
-        "provider": "openai",
-        "input_price": 5.0,
-        "cached_input_price": 0.5,
-        "cache_write_price": 6.25,
-        "output_price": 30.0,
-        "batch_input_price": 2.5,
-        "batch_output_price": 15.0,
-        "description": "Frontier GPT-5.6 model for complex senior review",
-        "secret_name": "OPENAI_API_KEY",
-        "long_context_threshold": 272_000,
-        "long_input_multiplier": 2.0,
-        "long_output_multiplier": 1.5,
+        "active_parameters_b": (67, 200),
+        "parameter_source": "EcoLogits estimate for Claude Opus 5",
+        "legacy": True,
     },
 }
 USER_SELECTABLE_MODELS = (HAIKU_MODEL, LUNA_MODEL, TERRA_MODEL)
 ANALYST_MODELS = (HAIKU_MODEL, LUNA_MODEL)
 REVIEWER_MODELS = (LUNA_MODEL, HAIKU_MODEL, TERRA_MODEL, SONNET_MODEL)
-SENIOR_REVIEWER_MODELS = (
-    TERRA_MODEL,
-    SONNET_MODEL,
-    OPUS_MODEL,
-    SOL_MODEL,
-)
+SENIOR_REVIEWER_MODELS = (SOL_MODEL, OPUS_MODEL)
 MODEL_PRICING_PER_MTOK = {
     model_id: (details["input_price"], details["output_price"])
     for model_id, details in MODEL_CATALOG.items()
 }
+# OpenAI reports "priority" for Fast mode on GPT-5.6 and earlier models.
+FAST_SERVICE_TIERS = frozenset({"fast", "priority"})
+
+# Operational-emissions model for API usage. Electricity per output token,
+# including whole-server power and data-centre overhead (PUE), rises linearly
+# with a model's active parameters: 0.1 + 0.003 Wh per 1,000 tokens per billion
+# parameters. The line is fitted to Oviedo et al. (Joule, 2026) estimates for
+# production serving on H100 nodes: Mixtral 8x22B 0.06 Wh, Llama 3.1 70B
+# 0.09 Wh and Llama 3.1 405B 0.39 Wh per query of about 300 output tokens.
+ENERGY_WH_PER_1K_OUTPUT_BASE = 0.1
+ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS = 0.003
+# Prompt tokens are processed in parallel, so each costs about a fifth of an
+# output token, matching both providers' 5:1 output:input price ratio. Cache
+# reads skip recomputation and are assumed to cost a tenth of a fresh prompt
+# token.
+PROMPT_TOKEN_ENERGY_RATIO = 0.2
+CACHED_PROMPT_TOKEN_ENERGY_RATIO = 0.1
+# Attention work grows with context length, so prompt and output energy per
+# token rise linearly with request size, reaching +100% and +50% at 272K
+# tokens: the uplifts OpenAI prices in above that size.
+CONTEXT_ENERGY_REFERENCE_TOKENS = 272_000
+CONTEXT_PROMPT_ENERGY_UPLIFT = 1.0
+CONTEXT_OUTPUT_ENERGY_UPLIFT = 0.5
+# Fast mode buys extra accelerator time per token; energy is conservatively
+# assumed to rise in line with its 2x price premium.
+FAST_MODE_ENERGY_MULTIPLIER = 2.0
+# Location-based US average grid intensity: EPA eGRID2023 total output
+# emission rate of 770.9 lb CO2e/MWh.
+GRID_CARBON_INTENSITY_G_PER_KWH = 349.7
+# The plausible range runs from a third of to three times the central value.
+EMISSIONS_UNCERTAINTY_FACTOR = 3.0
 
 
 class AnalysisAuthenticationError(RuntimeError):
@@ -225,12 +338,23 @@ def get_model_config(model_id: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported analysis model: {model_id}") from error
 
 
+def requested_price_multiplier(model_id: str) -> float:
+    """Return the price multiplier for the tier a model is requested in."""
+    model = get_model_config(model_id)
+    if model.get("service_tier") in FAST_SERVICE_TIERS:
+        return float(model.get("fast_price_multiplier", 1.0))
+    return 1.0
+
+
 def model_picker_label(model_id: str) -> str:
     """Return a concise model-and-price label for the Streamlit picker."""
     model = get_model_config(model_id)
+    multiplier = requested_price_multiplier(model_id)
+    tier_note = " (Fast mode)" if multiplier != 1.0 else ""
     return (
-        f"{model['label']} — ${model['input_price']:g} input / "
-        f"${model['output_price']:g} output per 1M tokens"
+        f"{model['label']}{tier_note} — "
+        f"${model['input_price'] * multiplier:g} input / "
+        f"${model['output_price'] * multiplier:g} output per 1M tokens"
     )
 
 
@@ -432,7 +556,7 @@ def build_openai_vision_blocks(
                         f"data:{source['media_type']};base64,{source['data']}"
                     ),
                     # Dense tables benefit from explicit high detail while
-                    # avoiding GPT-5.6's potentially larger auto/original input.
+                    # avoiding GPT models' potentially larger auto/original input.
                     "detail": "high",
                 }
             )
@@ -480,7 +604,7 @@ def _assessment_result_schema() -> dict[str, Any]:
 
 
 def _openai_result_schema() -> dict[str, Any]:
-    """Return the strict Responses API wrapper used by GPT-5.6 models."""
+    """Return the strict Responses API wrapper used by GPT models."""
     return {
         "type": "json_schema",
         "name": "framework_assessment",
@@ -536,6 +660,8 @@ def estimate_usage_cost(
         cache_write_rate = float(model["cache_write_price"])
         output_rate = float(model["output_price"])
         pricing_factor = 0.5 if record.get("batch_priced") else 1.0
+        if record.get("service_tier") in FAST_SERVICE_TIERS:
+            pricing_factor *= float(model.get("fast_price_multiplier", 1.0))
         input_tokens = int(record.get("input_tokens", 0) or 0)
         output_tokens = int(record.get("output_tokens", 0) or 0)
         cache_read = int(record.get("cache_read_tokens", 0) or 0)
@@ -561,6 +687,64 @@ def estimate_usage_cost(
             - cache_write * (cache_write_rate - input_rate)
         ) / 1_000_000
     return cost, cache_savings
+
+
+def model_energy_per_1k_output_wh(model_id: str) -> float:
+    """Return a model's estimated electricity use per 1,000 output tokens."""
+    low, high = get_model_config(model_id)["active_parameters_b"]
+    # The geometric mean is the central value of a multiplicative range.
+    active_parameters_b = math.sqrt(low * high)
+    return (
+        ENERGY_WH_PER_1K_OUTPUT_BASE
+        + ENERGY_WH_PER_1K_OUTPUT_PER_BILLION_PARAMETERS * active_parameters_b
+    )
+
+
+def estimate_usage_emissions(
+    usage_records: Iterable[dict[str, Any]],
+) -> dict[str, float]:
+    """Return estimated inference electricity (Wh) and CO2e (g) for usage.
+
+    The estimate is location-based and covers electricity used to serve the
+    requests only. Model training, hardware manufacturing, and water use are
+    outside its boundary.
+    """
+    energy_wh = 0.0
+    for record in usage_records:
+        output_token_wh = (
+            model_energy_per_1k_output_wh(str(record.get("model", ""))) / 1000
+        )
+        input_tokens = int(record.get("input_tokens", 0) or 0)
+        output_tokens = int(record.get("output_tokens", 0) or 0)
+        cache_read = int(record.get("cache_read_tokens", 0) or 0)
+        cache_write = int(record.get("cache_write_tokens", 0) or 0)
+
+        context_share = (
+            input_tokens + cache_read + cache_write
+        ) / CONTEXT_ENERGY_REFERENCE_TOKENS
+        output_token_equivalents = (
+            output_tokens * (1 + CONTEXT_OUTPUT_ENERGY_UPLIFT * context_share)
+            + (input_tokens + cache_write)
+            * PROMPT_TOKEN_ENERGY_RATIO
+            * (1 + CONTEXT_PROMPT_ENERGY_UPLIFT * context_share)
+            + cache_read
+            * PROMPT_TOKEN_ENERGY_RATIO
+            * CACHED_PROMPT_TOKEN_ENERGY_RATIO
+        )
+        tier_factor = (
+            FAST_MODE_ENERGY_MULTIPLIER
+            if record.get("service_tier") in FAST_SERVICE_TIERS
+            else 1.0
+        )
+        energy_wh += output_token_wh * output_token_equivalents * tier_factor
+
+    co2e_g = energy_wh / 1000 * GRID_CARBON_INTENSITY_G_PER_KWH
+    return {
+        "energy_wh": energy_wh,
+        "co2e_g": co2e_g,
+        "co2e_g_low": co2e_g / EMISSIONS_UNCERTAINTY_FACTOR,
+        "co2e_g_high": co2e_g * EMISSIONS_UNCERTAINTY_FACTOR,
+    }
 
 
 def _system_prompt_text(report_text: str) -> str:
@@ -884,6 +1068,7 @@ def _add_usage(
     *,
     provider: str = "anthropic",
     batch_priced: bool = False,
+    requested_service_tier: str | None = None,
 ) -> None:
     usage = _usage_values(message, provider=provider)
     for key, value in usage.items():
@@ -891,14 +1076,20 @@ def _add_usage(
     if batch_priced:
         total["batch_input_tokens"] += usage["input_tokens"]
         total["batch_output_tokens"] += usage["output_tokens"]
-    total["usage_records"].append(
-        {
-            "model": model,
-            "provider": provider,
-            "batch_priced": batch_priced,
-            **usage,
-        }
-    )
+    record = {
+        "model": model,
+        "provider": provider,
+        "batch_priced": batch_priced,
+        **usage,
+    }
+    if provider == "openai":
+        # The response names the tier that actually served the request. Fast
+        # mode requests downgraded under ramp limits report "default" and are
+        # billed at standard rates.
+        service_tier = _get(message, "service_tier") or requested_service_tier
+        if service_tier:
+            record["service_tier"] = str(service_tier)
+    total["usage_records"].append(record)
     total["models_used"].add(model)
 
 
@@ -1093,6 +1284,8 @@ def _analyze_report_with_anthropic(
     model = get_model_config(model_id)
     if model["provider"] != "anthropic":
         raise ValueError(f"{model_id} is not an Anthropic model")
+    # A model can pin its reasoning effort; otherwise the caller's applies.
+    reasoning_effort = model.get("reasoning_effort", reasoning_effort)
     if client is None:
         if anthropic is None:
             raise RuntimeError(
@@ -1560,7 +1753,7 @@ def _openai_request_params(
     prompt_cache_key: str,
     reasoning_effort: str = "medium",
 ) -> dict[str, Any]:
-    return {
+    params = {
         "model": model_id,
         "instructions": system_text,
         "input": [
@@ -1573,12 +1766,16 @@ def _openai_request_params(
             }
         ],
         "text": {"format": _openai_result_schema()},
-        # Make the effective effort explicit and comparable across Luna/Terra.
+        # Make the effective effort explicit and comparable across models.
         "reasoning": {"effort": reasoning_effort},
         "max_output_tokens": 32_768,
         "store": False,
         "prompt_cache_key": prompt_cache_key,
     }
+    service_tier = get_model_config(model_id).get("service_tier")
+    if service_tier:
+        params["service_tier"] = service_tier
+    return params
 
 
 def _openai_sync_request(
@@ -1643,9 +1840,12 @@ def _analyze_report_with_openai(
     model = get_model_config(model_id)
     if model["provider"] != "openai":
         raise ValueError(f"{model_id} is not an OpenAI model")
+    # A model can pin its reasoning effort (GPT-6 Sol always runs at medium);
+    # otherwise the caller's effort applies.
+    reasoning_effort = model.get("reasoning_effort", reasoning_effort)
     if client is None:
         if openai is None:
-            raise RuntimeError(_openai_unavailable_message("GPT-5.6 analysis"))
+            raise RuntimeError(_openai_unavailable_message("OpenAI GPT analysis"))
         client = openai.OpenAI(api_key=api_key)
 
     pages = report_pages or []
@@ -1751,13 +1951,19 @@ def _analyze_report_with_openai(
     failures: list[dict[str, Any]] = []
 
     if use_batch and prepared:
+        # Batch requests are always served by batch processing, so a model's
+        # synchronous Fast mode tier is not sent with them.
         rows = [
             json.dumps(
                 {
                     "custom_id": item["custom_id"],
                     "method": "POST",
                     "url": "/v1/responses",
-                    "body": item["params"],
+                    "body": {
+                        key: value
+                        for key, value in item["params"].items()
+                        if key != "service_tier"
+                    },
                 },
                 ensure_ascii=False,
             )
@@ -1908,6 +2114,7 @@ def _analyze_report_with_openai(
             response,
             model_id,
             provider="openai",
+            requested_service_tier=prepared_item["params"].get("service_tier"),
         )
         try:
             items = _validate_items(
@@ -1965,6 +2172,7 @@ def _analyze_report_with_openai(
                     topic_response,
                     model_id,
                     provider="openai",
+                    requested_service_tier=topic_params.get("service_tier"),
                 )
                 topic_items = _validate_items(
                     _parse_openai_response(topic_response),
@@ -2455,7 +2663,7 @@ def analyze_report_with_review_cascade(
     openai_client: Any | None = None,
     analyst_model_id: str = HAIKU_MODEL,
     reviewer_model_id: str = LUNA_MODEL,
-    senior_reviewer_model_id: str = TERRA_MODEL,
+    senior_reviewer_model_id: str = SOL_MODEL,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]], dict[str, Any]]:
     """Run a configurable analyst, reviewer, and conditional senior reviewer.
 
