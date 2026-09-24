@@ -7,7 +7,7 @@ reporting frameworks with Anthropic Claude or OpenAI GPT models.
 ## Models and pricing
 
 Users can choose either a single model (Claude Haiku 4.5, GPT-6 Luna, or
-GPT-5.6 Terra) or configure all three roles in the optional reviewed cascade:
+GPT-6 Sol) or configure all three roles in the optional reviewed cascade:
 
 1. **Analyst:** Claude Haiku 4.5 or GPT-6 Luna performs the initial assessment.
 2. **Reviewer:** GPT-6 Luna, Claude Haiku 4.5, GPT-5.6 Terra, or Claude
@@ -31,11 +31,11 @@ List prices below are USD per million tokens as of 22 September 2026:
 | GPT-5.6 Terra | $2 / $12 | $0.20 / $2.50 | $1 / $6 |
 | Claude Sonnet 5 | $2 / $10 | $0.20 / $2.50 | $1 / $5 |
 | Claude Opus 5.5 | $4 / $20 | $0.20 / $5 | $2 / $10 |
-| GPT-6 Sol, Fast mode* | $4 / $20 | $0.40 / $5 | Not used |
+| GPT-6 Sol, Fast mode* | $4 / $20 | $0.40 / $5 | $1 / $5 |
 
 \* GPT-6 Sol's standard rates are $2 / $10 (cache $0.20 / $2.50). The app
 requests Fast mode (`service_tier: "fast"`), which OpenAI bills at twice the
-standard rates. Each cost is taken from the tier the response reports: OpenAI
+standard rates, except for Batch API runs, which always use batch pricing. Each cost is taken from the tier the response reports: OpenAI
 can downgrade Fast mode requests to standard processing under its ramp-rate
 limits, and those report `service_tier: "default"` and are costed at standard
 rates.
@@ -109,7 +109,7 @@ inference, efficiency pathways, and test-time scaling", *Joule*
   different classifications are flagged for human review and excluded from
   coverage percentages rather than presented as model agreement.
 - **Provider-aware batches:** independent framework requests use Anthropic
-  Message Batches for Haiku or OpenAI Batch for Luna and Terra. Results are
+  Message Batches for Haiku or OpenAI Batch for Luna and Sol. Results are
   matched through unique `custom_id` values even when returned out of order.
   Failed or malformed items retry individually with the same selected model,
   oversized multimodal payloads fall back safely, and usage reflects the 50%

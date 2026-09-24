@@ -2116,14 +2116,15 @@ def main():
             (
                 "Pick the model, then paste the matching API key",
                 "In Single model mode you choose one of Claude Haiku 4.5, "
-                "GPT-6 Luna or GPT-5.6 Terra, and the app shows that "
+                "GPT-6 Luna or GPT-6 Sol, and the app shows that "
                 "model's price per million tokens. In cascade mode you "
                 "choose all three roles instead. The key box that appears "
                 "matches whichever provider you selected.",
                 "Haiku 4.5 or GPT-6 Luna — both are the cheap tier and are "
-                "the right default, and Luna is the cheapest. Terra costs 2× "
-                "Haiku and 20× Luna per input token, so save it for a "
-                "document you already know is hard.",
+                "the right default, and Luna is the cheapest. GPT-6 Sol is "
+                "OpenAI's flagship and runs in Fast mode, costing 4× Haiku "
+                "per input token, so save it for a document you already "
+                "know is hard.",
             ),
             (
                 "Choose the frameworks to assess against",
@@ -4260,11 +4261,17 @@ def main():
                     [*records_a, *records_b]
                 )
                 model_label = get_model_config(model_id_used)["label"]
+                multiplier = requested_price_multiplier(model_id_used)
+                pricing_note = (
+                    f"Fast mode pricing applied ({multiplier:g}× standard)."
+                    if multiplier != 1.0
+                    else "Standard API pricing applied."
+                )
                 st.info(
                     f"{model_label} estimated cost — {name_a}: "
                     f"{usd(cost_a, '.4f')}; {name_b}: {usd(cost_b, '.4f')}; "
-                    f"combined: {usd(cost_a + cost_b, '.4f')}. Standard API "
-                    "pricing applied. "
+                    f"combined: {usd(cost_a + cost_b, '.4f')}. "
+                    f"{pricing_note} "
                     "Estimated emissions — "
                     f"{name_a}: ~{format_estimate(emissions_a['co2e_g'])} g "
                     f"CO2e; {name_b}: ~{format_estimate(emissions_b['co2e_g'])} "
