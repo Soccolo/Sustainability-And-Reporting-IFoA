@@ -435,7 +435,7 @@ class AnalysisCoreTests(unittest.TestCase):
             (
                 analysis_core.HAIKU_MODEL,
                 analysis_core.LUNA_MODEL,
-                analysis_core.TERRA_MODEL,
+                analysis_core.SOL_MODEL,
             ),
         )
         self.assertEqual(
