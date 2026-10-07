@@ -44,7 +44,7 @@ DRAFT_DIRECTIONS = {
 # Drafting models. Sonnet is recommended: drafting disclosure prose is a
 # harder task than the classification done in the Report Analyser.
 DRAFTER_MODELS = {
-    "Claude Sonnet 5 — recommended for drafting quality": "claude-sonnet-5",
+    "Claude Sonnet 5.5 — recommended for drafting quality": "claude-sonnet-5-5",
     "Claude Haiku 4.5 — lowest cost": "claude-haiku-4-5",
 }
 
@@ -191,7 +191,7 @@ def claude_draft_report(page_texts, first_page_number, source_fw, target_fw,
         )
         if resp.stop_reason == "max_tokens":
             raise ValueError("Response truncated (max_tokens reached)")
-        # Sonnet 5 runs adaptive thinking by default, so the response may
+        # Sonnet 5.5 runs adaptive thinking by default, so the response may
         # lead with thinking blocks — join the text blocks only.
         raw = "".join(
             block.text for block in resp.content if block.type == "text"
