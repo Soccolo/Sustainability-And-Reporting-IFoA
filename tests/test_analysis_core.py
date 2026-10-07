@@ -430,14 +430,18 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(analysis_core.LUNA_MODEL, "gpt-6-luna")
         self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5-5")
         self.assertEqual(analysis_core.SOL_MODEL, "gpt-6-sol")
+        self.assertEqual(analysis_core.HAIKU_55_MODEL, "claude-haiku-5-5")
         self.assertEqual(
             analysis_core.USER_SELECTABLE_MODELS,
             (
                 analysis_core.HAIKU_MODEL,
+                analysis_core.HAIKU_55_MODEL,
                 analysis_core.LUNA_MODEL,
                 analysis_core.SOL_MODEL,
             ),
         )
+        self.assertIn(analysis_core.HAIKU_55_MODEL, analysis_core.ANALYST_MODELS)
+        self.assertIn(analysis_core.HAIKU_55_MODEL, analysis_core.REVIEWER_MODELS)
         self.assertEqual(
             analysis_core.SENIOR_REVIEWER_MODELS,
             (analysis_core.SOL_MODEL, analysis_core.OPUS_MODEL),
@@ -446,6 +450,9 @@ class AnalysisCoreTests(unittest.TestCase):
         expected = {
             analysis_core.HAIKU_MODEL: (
                 "anthropic", 1.0, 5.0, 0.1, 1.25, 0.5, 2.5
+            ),
+            analysis_core.HAIKU_55_MODEL: (
+                "anthropic", 0.1, 0.5, 0.01, 0.125, 0.05, 0.25
             ),
             analysis_core.LUNA_MODEL: (
                 "openai", 0.1, 0.5, 0.01, 0.125, 0.05, 0.25
@@ -538,6 +545,78 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertAlmostEqual(below, 0.0272)
         self.assertAlmostEqual(above, 0.0544002)
         self.assertAlmostEqual(batch, above / 2)
+
+    def test_haiku_55_long_prompts_cost_five_times_more(self):
+        def haiku_55_cost(**tokens):
+            cost, _ = analysis_core.estimate_usage_cost(
+                [{"model": analysis_core.HAIKU_55_MODEL, **tokens}]
+            )
+            return cost
+
+        # Up to 100K prompt tokens: $0.10 input / $0.50 output.
+        self.assertAlmostEqual(
+            haiku_55_cost(input_tokens=100_000, output_tokens=10_000),
+            0.01 + 0.005,
+        )
+        # Above it, every token in the request is charged 5x, and cache
+        # reads and writes count towards the threshold.
+        self.assertAlmostEqual(
+            haiku_55_cost(
+                input_tokens=1_000,
+                cache_read_tokens=99_001,
+                output_tokens=10_000,
+            ),
+            (1_000 * 0.5 + 99_001 * 0.05 + 10_000 * 2.5) / 1_000_000,
+        )
+        self.assertAlmostEqual(
+            haiku_55_cost(
+                input_tokens=100_001, output_tokens=0, batch_priced=True
+            ),
+            100_001 * 0.25 / 1_000_000,
+        )
+
+    def test_haiku_55_uses_adaptive_thinking_without_temperature(self):
+        client = SequencedAnthropicClient(
+            [
+                message_for(
+                    [
+                        cascade_item(
+                            "R0001",
+                            analysis_core.CLASSIFICATION_COVERS,
+                            "high",
+                            "Haiku 5.5 rationale.",
+                        )
+                    ],
+                    wrapped=True,
+                )
+            ]
+        )
+        results, _, usage = analysis_core.analyze_report(
+            report_text="[Page 1] Evidence",
+            selected_frameworks=["FW A"],
+            api_key="anthropic-key",
+            framework_requirements={"FW A": {"governance": ["Requirement one"]}},
+            framework_full_names={"FW A": "Framework A"},
+            use_batch=False,
+            client=client,
+            model_id=analysis_core.HAIKU_55_MODEL,
+        )
+
+        request = client.calls[0]
+        self.assertEqual(request["model"], "claude-haiku-5-5")
+        # Haiku 5.5 returns a 400 error for a non-default temperature.
+        self.assertNotIn("temperature", request)
+        self.assertEqual(request["thinking"], {"type": "adaptive"})
+        self.assertEqual(request["output_config"]["effort"], "medium")
+        self.assertEqual(
+            request["output_config"]["format"]["type"], "json_schema"
+        )
+        self.assertEqual(
+            results[0]["classification"], analysis_core.CLASSIFICATION_COVERS
+        )
+        self.assertEqual(
+            usage["usage_records"][0]["model"], analysis_core.HAIKU_55_MODEL
+        )
 
     def test_fast_mode_pricing_follows_the_tier_openai_reports(self):
         def sol_cost(service_tier=None, **tokens):
