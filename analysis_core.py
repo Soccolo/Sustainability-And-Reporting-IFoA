@@ -73,7 +73,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20260922_PRICING_EMISSIONS = True
+ANALYSIS_CORE_REVISION_20261007_HAIKU_55 = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -96,6 +96,7 @@ class AnalysisProviderStreamError(RuntimeError):
 
 
 HAIKU_MODEL = "claude-haiku-4-5-20251001"
+HAIKU_55_MODEL = "claude-haiku-5-5"
 LUNA_MODEL = "gpt-6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
 SONNET_MODEL = "claude-sonnet-5"
@@ -118,7 +119,7 @@ _OPENAI_LONG_CONTEXT_PRICING = {
 
 # One catalogue drives the pickers, request routing, and cost and emissions
 # estimates. Prices are USD per million tokens and reflect first-party API list
-# prices on 2026-09-22. Both providers apply a 50% Batch API discount. GPT-6 Sol
+# prices on 2026-10-07. Both providers apply a 50% Batch API discount. GPT-6 Sol
 # is requested in OpenAI Fast mode, which is billed at twice the standard rates.
 # active_parameters_b is EcoLogits' published range of active parameters in
 # billions. Models EcoLogits has not yet estimated use their direct
@@ -140,6 +141,36 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "temperature": 0.0,
         "active_parameters_b": (10, 35),
         "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
+    },
+    HAIKU_55_MODEL: {
+        "label": "Claude Haiku 5.5",
+        "provider": "anthropic",
+        "input_price": 0.1,
+        "cached_input_price": 0.01,
+        "cache_write_price": 0.125,
+        "output_price": 0.5,
+        "batch_input_price": 0.05,
+        "batch_output_price": 0.25,
+        "description": (
+            "Newest, lowest-cost Claude model. A report longer than roughly "
+            "50,000 words is charged 5× these rates"
+        ),
+        "secret_name": "ANTHROPIC_API_KEY",
+        # Prompts above 100K tokens cost 5x for input, cache and output
+        # tokens, for the full request.
+        "long_context_threshold": 100_000,
+        "long_input_multiplier": 5.0,
+        "long_output_multiplier": 5.0,
+        # Haiku 5.5 rejects non-default temperature, so it runs with adaptive
+        # thinking at the requested effort instead.
+        "adaptive_thinking": True,
+        "structured_output": True,
+        "review_max_tokens": 64_000,
+        "active_parameters_b": (10, 35),
+        "parameter_source": (
+            "EcoLogits estimate for Claude Haiku 4.5, used as a proxy for "
+            "Claude Haiku 5.5"
+        ),
     },
     LUNA_MODEL: {
         "label": "GPT-6 Luna",
@@ -288,9 +319,15 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "legacy": True,
     },
 }
-USER_SELECTABLE_MODELS = (HAIKU_MODEL, LUNA_MODEL, SOL_MODEL)
-ANALYST_MODELS = (HAIKU_MODEL, LUNA_MODEL)
-REVIEWER_MODELS = (LUNA_MODEL, HAIKU_MODEL, TERRA_MODEL, SONNET_MODEL)
+USER_SELECTABLE_MODELS = (HAIKU_MODEL, HAIKU_55_MODEL, LUNA_MODEL, SOL_MODEL)
+ANALYST_MODELS = (HAIKU_MODEL, HAIKU_55_MODEL, LUNA_MODEL)
+REVIEWER_MODELS = (
+    LUNA_MODEL,
+    HAIKU_MODEL,
+    HAIKU_55_MODEL,
+    TERRA_MODEL,
+    SONNET_MODEL,
+)
 SENIOR_REVIEWER_MODELS = (SOL_MODEL, OPUS_MODEL)
 MODEL_PRICING_PER_MTOK = {
     model_id: (details["input_price"], details["output_price"])

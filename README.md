@@ -6,12 +6,14 @@ reporting frameworks with Anthropic Claude or OpenAI GPT models.
 
 ## Models and pricing
 
-Users can choose either a single model (Claude Haiku 4.5, GPT-6 Luna, or
-GPT-6 Sol) or configure all three roles in the optional reviewed cascade:
+Users can choose either a single model (Claude Haiku 4.5, Claude Haiku 5.5,
+GPT-6 Luna, or GPT-6 Sol) or configure all three roles in the optional reviewed
+cascade:
 
-1. **Analyst:** Claude Haiku 4.5 or GPT-6 Luna performs the initial assessment.
-2. **Reviewer:** GPT-6 Luna, Claude Haiku 4.5, GPT-5.6 Terra, or Claude
-   Sonnet 5 assesses every requirement blind: it reads the report itself and
+1. **Analyst:** Claude Haiku 4.5, Claude Haiku 5.5, or GPT-6 Luna performs the
+   initial assessment.
+2. **Reviewer:** GPT-6 Luna, Claude Haiku 4.5, Claude Haiku 5.5, GPT-5.6 Terra,
+   or Claude Sonnet 5 assesses every requirement blind: it reads the report itself and
    never sees the analyst's verdict, evidence or rationale, so agreement is
    independent confirmation rather than the reviewer following the analyst.
 3. **Senior reviewer:** GPT-6 Sol or Claude Opus 5.5 reviews only requirements
@@ -22,11 +24,12 @@ The analyst and reviewer must differ, as must the reviewer and senior reviewer.
 These rules are enforced in both the UI and analysis engine. Single-model runs
 never silently switch to a differently priced fallback.
 
-List prices below are USD per million tokens as of 22 September 2026:
+List prices below are USD per million tokens as of 7 October 2026:
 
 | Model | Standard input / output | Cache read / write | Batch input / output |
 | --- | ---: | ---: | ---: |
 | Claude Haiku 4.5 | $1 / $5 | $0.10 / $1.25 | $0.50 / $2.50 |
+| Claude Haiku 5.5† | $0.10 / $0.50 | $0.01 / $0.125 | $0.05 / $0.25 |
 | GPT-6 Luna | $0.10 / $0.50 | $0.01 / $0.125 | $0.05 / $0.25 |
 | GPT-5.6 Terra | $2 / $12 | $0.20 / $2.50 | $1 / $6 |
 | Claude Sonnet 5 | $2 / $10 | $0.20 / $2.50 | $1 / $5 |
@@ -40,12 +43,19 @@ can downgrade Fast mode requests to standard processing under its ramp-rate
 limits, and those report `service_tier: "default"` and are costed at standard
 rates.
 
+† Haiku 5.5 rates apply to prompts up to 100,000 tokens. Larger prompts are
+billed at 5× for the whole request: $0.50 / $2.50, cache $0.05 / $0.625, batch
+$0.25 / $1.25. Cache reads and writes count towards the threshold. Haiku 5.5
+uses a newer tokenizer that counts the same text as about 30% more tokens than
+Haiku 4.5. It does not accept a temperature setting, so it runs with adaptive
+thinking, while Haiku 4.5 runs at temperature 0.
+
 Sonnet 5's $2 / $10 is now Anthropic's standard price; the scheduled rise to
 $3 / $15 did not happen. Opus 5.5 cache reads cost 0.05× input rather than the
 usual 0.1×. Vision tokenisation differs by provider, and reasoning tokens are
 included in billed output. GPT requests above 272,000 prompt tokens are billed
 at OpenAI's long-context rates (2× input and cache, 1.5× output, for the whole
-request); Claude models have no long-context premium. The application
+request). Among Claude models only Haiku 5.5 has a long-context premium. The application
 calculates an estimated run cost from the usage returned by each provider.
 
 Superseded models (GPT-5.6 Luna, GPT-5.6 Sol, and Claude Opus 5) can no longer
@@ -67,9 +77,10 @@ energy figures, so the estimate is built from published research:
   3.1 70B 0.09 Wh, and Llama 3.1 405B 0.39 Wh per query of about 300 output
   tokens.
 - **Active parameters** come from EcoLogits' published ranges, taking the
-  geometric midpoint. GPT-6 Luna, GPT-6 Sol, and Claude Opus 5.5 are not yet
-  estimated, so they use their direct predecessors (GPT-5.6 Luna, GPT-5.6 Sol,
-  and Claude Opus 5) as documented proxies.
+  geometric midpoint. GPT-6 Luna, GPT-6 Sol, Claude Opus 5.5, and Claude
+  Haiku 5.5 are not yet estimated, so they use their direct predecessors
+  (GPT-5.6 Luna, GPT-5.6 Sol, Claude Opus 5, and Claude Haiku 4.5) as
+  documented proxies.
 - **Prompt tokens** count as 0.2 of an output token, because they are processed
   in parallel. This matches both providers' 5:1 output-to-input price ratio.
   **Cache reads** skip recomputation and count as 0.02. Attention work grows
