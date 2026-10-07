@@ -32,7 +32,7 @@ from startup_compat import import_module_with_exports
 _ANALYSIS_CORE_EXPORTS = (
     # Revision-specific marker: a cached older analysis module can have all the
     # ordinary exports below, so this unique name triggers a one-time reload.
-    "ANALYSIS_CORE_REVISION_20261007_HAIKU_55",
+    "ANALYSIS_CORE_REVISION_20261007_SONNET_55",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "CACHED_PROMPT_TOKEN_ENERGY_RATIO",
@@ -2262,7 +2262,7 @@ def main():
                 "and gives every requirement a classification, evidence and "
                 "a confidence flag.\n\n"
                 "**2. Reviewer** — a *different* model (GPT-6 Luna, Haiku "
-                "4.5, Haiku 5.5, GPT-5.6 Terra or Sonnet 5) assesses every "
+                "4.5, Haiku 5.5, GPT-5.6 Terra or Sonnet 5.5) assesses every "
                 "requirement "
                 "blind: it reads the report itself and never sees the "
                 "analyst's verdict, so agreement is a genuine second opinion. "

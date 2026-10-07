@@ -431,6 +431,11 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5-5")
         self.assertEqual(analysis_core.SOL_MODEL, "gpt-6-sol")
         self.assertEqual(analysis_core.HAIKU_55_MODEL, "claude-haiku-5-5")
+        self.assertEqual(analysis_core.SONNET_MODEL, "claude-sonnet-5-5")
+        self.assertEqual(
+            analysis_core.get_model_config(analysis_core.SONNET_MODEL)["label"],
+            "Claude Sonnet 5.5",
+        )
         self.assertEqual(
             analysis_core.USER_SELECTABLE_MODELS,
             (
@@ -775,6 +780,7 @@ class AnalysisCoreTests(unittest.TestCase):
             analysis_core.LEGACY_LUNA_MODEL,
             analysis_core.LEGACY_SOL_MODEL,
             analysis_core.LEGACY_OPUS_MODEL,
+            analysis_core.LEGACY_SONNET_MODEL,
         ):
             config = analysis_core.get_model_config(model_id)
             self.assertTrue(config["legacy"])

@@ -73,7 +73,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20261007_HAIKU_55 = True
+ANALYSIS_CORE_REVISION_20261007_SONNET_55 = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -99,7 +99,7 @@ HAIKU_MODEL = "claude-haiku-4-5-20251001"
 HAIKU_55_MODEL = "claude-haiku-5-5"
 LUNA_MODEL = "gpt-6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
-SONNET_MODEL = "claude-sonnet-5"
+SONNET_MODEL = "claude-sonnet-5-5"
 OPUS_MODEL = "claude-opus-5-5"
 SOL_MODEL = "gpt-6-sol"
 PRIMARY_MODEL = HAIKU_MODEL
@@ -108,6 +108,7 @@ PRIMARY_MODEL = HAIKU_MODEL
 LEGACY_LUNA_MODEL = "gpt-5.6-luna"
 LEGACY_SOL_MODEL = "gpt-5.6-sol"
 LEGACY_OPUS_MODEL = "claude-opus-5"
+LEGACY_SONNET_MODEL = "claude-sonnet-5"
 
 _OPENAI_LONG_CONTEXT_PRICING = {
     # Prompts above 272K tokens cost 2x for input and cache tokens and 1.5x
@@ -208,7 +209,7 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "parameter_source": "EcoLogits estimate for GPT-5.6 Terra",
     },
     SONNET_MODEL: {
-        "label": "Claude Sonnet 5",
+        "label": "Claude Sonnet 5.5",
         "provider": "anthropic",
         "input_price": 2.0,
         "cached_input_price": 0.2,
@@ -222,7 +223,10 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "structured_output": True,
         "review_max_tokens": 64_000,
         "active_parameters_b": (29, 88),
-        "parameter_source": "EcoLogits estimate for Claude Sonnet 5",
+        "parameter_source": (
+            "EcoLogits estimate for Claude Sonnet 5, used as a proxy for "
+            "Claude Sonnet 5.5"
+        ),
     },
     OPUS_MODEL: {
         "label": "Claude Opus 5.5",
@@ -316,6 +320,24 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "review_max_tokens": 96_000,
         "active_parameters_b": (67, 200),
         "parameter_source": "EcoLogits estimate for Claude Opus 5",
+        "legacy": True,
+    },
+    LEGACY_SONNET_MODEL: {
+        "label": "Claude Sonnet 5",
+        "provider": "anthropic",
+        "input_price": 2.0,
+        "cached_input_price": 0.2,
+        "cache_write_price": 2.5,
+        "output_price": 10.0,
+        "batch_input_price": 1.0,
+        "batch_output_price": 5.0,
+        "description": "Superseded by Claude Sonnet 5.5",
+        "secret_name": "ANTHROPIC_API_KEY",
+        "adaptive_thinking": True,
+        "structured_output": True,
+        "review_max_tokens": 64_000,
+        "active_parameters_b": (29, 88),
+        "parameter_source": "EcoLogits estimate for Claude Sonnet 5",
         "legacy": True,
     },
 }
