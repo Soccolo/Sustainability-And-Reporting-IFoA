@@ -6,13 +6,13 @@ reporting frameworks with Anthropic Claude or OpenAI GPT models.
 
 ## Models and pricing
 
-Users can choose either a single model (Claude Haiku 4.5, Claude Haiku 5.5,
-GPT-6 Luna, or GPT-6 Sol) or configure all three roles in the optional reviewed
+Users can choose either a single model (Claude Haiku 5.5, GPT-6 Luna,
+or GPT-6 Sol) or configure all three roles in the optional reviewed
 cascade:
 
-1. **Analyst:** Claude Haiku 4.5, Claude Haiku 5.5, or GPT-6 Luna performs the
+1. **Analyst:** Claude Haiku 5.5 or GPT-6 Luna performs the
    initial assessment.
-2. **Reviewer:** GPT-6 Luna, Claude Haiku 4.5, Claude Haiku 5.5, GPT-5.6 Terra,
+2. **Reviewer:** GPT-6 Luna, Claude Haiku 5.5, GPT-5.6 Terra,
    or Claude Sonnet 5.5 assesses every requirement blind: it reads the report itself and
    never sees the analyst's verdict, evidence or rationale, so agreement is
    independent confirmation rather than the reviewer following the analyst.
@@ -28,7 +28,6 @@ List prices below are USD per million tokens as of 7 October 2026:
 
 | Model | Standard input / output | Cache read / write | Batch input / output |
 | --- | ---: | ---: | ---: |
-| Claude Haiku 4.5 | $1 / $5 | $0.10 / $1.25 | $0.50 / $2.50 |
 | Claude Haiku 5.5† | $0.10 / $0.50 | $0.01 / $0.125 | $0.05 / $0.25 |
 | GPT-6 Luna | $0.10 / $0.50 | $0.01 / $0.125 | $0.05 / $0.25 |
 | GPT-5.6 Terra | $2 / $12 | $0.20 / $2.50 | $1 / $6 |
@@ -48,7 +47,11 @@ billed at 5× for the whole request: $0.50 / $2.50, cache $0.05 / $0.625, batch
 $0.25 / $1.25. Cache reads and writes count towards the threshold. Haiku 5.5
 uses a newer tokenizer that counts the same text as about 30% more tokens than
 Haiku 4.5. It does not accept a temperature setting, so it runs with adaptive
-thinking, while Haiku 4.5 runs at temperature 0.
+thinking and the app sends no temperature to any model.
+
+Haiku 5.5 replaced Haiku 4.5, which is no longer selectable. Haiku 4.5 stays
+priced ($1 / $5) as a legacy model so earlier results and pending batches still
+cost correctly.
 
 Sonnet 5.5 keeps Sonnet 5's $2 / $10 price and, like it, runs with adaptive
 thinking because it does not accept a temperature setting. Opus 5.5 cache reads cost 0.05× input rather than the

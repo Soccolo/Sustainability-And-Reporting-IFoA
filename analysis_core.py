@@ -73,7 +73,7 @@ ALL_CLASSIFICATIONS = [
 # Bump this exported marker whenever Streamlit and analysis-core behaviour must
 # be deployed atomically. The entry point requires the exact marker name, which
 # makes an older cached module reload once before any analysis function is bound.
-ANALYSIS_CORE_REVISION_20261007_SONNET_55 = True
+ANALYSIS_CORE_REVISION_20261027_HAIKU_55_ONLY = True
 _ASSESSMENT_ITEM_FIELDS = {
     "requirement_id",
     "topic",
@@ -95,8 +95,10 @@ class AnalysisProviderStreamError(RuntimeError):
     """A recoverable provider-stream failure after bounded retries."""
 
 
-HAIKU_MODEL = "claude-haiku-4-5-20251001"
-HAIKU_55_MODEL = "claude-haiku-5-5"
+HAIKU_MODEL = "claude-haiku-5-5"
+# Kept as an alias so older imports keep working; Haiku 5.5 is now the only
+# selectable Haiku.
+HAIKU_55_MODEL = HAIKU_MODEL
 LUNA_MODEL = "gpt-6-luna"
 TERRA_MODEL = "gpt-5.6-terra"
 SONNET_MODEL = "claude-sonnet-5-5"
@@ -109,6 +111,7 @@ LEGACY_LUNA_MODEL = "gpt-5.6-luna"
 LEGACY_SOL_MODEL = "gpt-5.6-sol"
 LEGACY_OPUS_MODEL = "claude-opus-5"
 LEGACY_SONNET_MODEL = "claude-sonnet-5"
+LEGACY_HAIKU_MODEL = "claude-haiku-4-5-20251001"
 
 _OPENAI_LONG_CONTEXT_PRICING = {
     # Prompts above 272K tokens cost 2x for input and cache tokens and 1.5x
@@ -127,23 +130,6 @@ _OPENAI_LONG_CONTEXT_PRICING = {
 # predecessor's range as a proxy, as recorded in parameter_source.
 MODEL_CATALOG: dict[str, dict[str, Any]] = {
     HAIKU_MODEL: {
-        "label": "Claude Haiku 4.5",
-        "provider": "anthropic",
-        "input_price": 1.0,
-        "cached_input_price": 0.1,
-        "cache_write_price": 1.25,
-        "output_price": 5.0,
-        "batch_input_price": 0.5,
-        "batch_output_price": 2.5,
-        "description": "Fast, low-cost Claude model",
-        "secret_name": "ANTHROPIC_API_KEY",
-        # The default temperature of 1.0 made verdicts vary between runs.
-        # Haiku runs without extended thinking, so the API accepts 0.
-        "temperature": 0.0,
-        "active_parameters_b": (10, 35),
-        "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
-    },
-    HAIKU_55_MODEL: {
         "label": "Claude Haiku 5.5",
         "provider": "anthropic",
         "input_price": 0.1,
@@ -340,13 +326,27 @@ MODEL_CATALOG: dict[str, dict[str, Any]] = {
         "parameter_source": "EcoLogits estimate for Claude Sonnet 5",
         "legacy": True,
     },
+    LEGACY_HAIKU_MODEL: {
+        "label": "Claude Haiku 4.5",
+        "provider": "anthropic",
+        "input_price": 1.0,
+        "cached_input_price": 0.1,
+        "cache_write_price": 1.25,
+        "output_price": 5.0,
+        "batch_input_price": 0.5,
+        "batch_output_price": 2.5,
+        "description": "Superseded by Claude Haiku 5.5",
+        "secret_name": "ANTHROPIC_API_KEY",
+        "active_parameters_b": (10, 35),
+        "parameter_source": "EcoLogits estimate for Claude Haiku 4.5",
+        "legacy": True,
+    },
 }
-USER_SELECTABLE_MODELS = (HAIKU_MODEL, HAIKU_55_MODEL, LUNA_MODEL, SOL_MODEL)
-ANALYST_MODELS = (HAIKU_MODEL, HAIKU_55_MODEL, LUNA_MODEL)
+USER_SELECTABLE_MODELS = (HAIKU_MODEL, LUNA_MODEL, SOL_MODEL)
+ANALYST_MODELS = (HAIKU_MODEL, LUNA_MODEL)
 REVIEWER_MODELS = (
     LUNA_MODEL,
     HAIKU_MODEL,
-    HAIKU_55_MODEL,
     TERRA_MODEL,
     SONNET_MODEL,
 )
@@ -1451,10 +1451,10 @@ def _analyze_report_with_anthropic(
                     }
                 ],
             }
+            # No model is sent a temperature: current Claude models reject a
+            # non-default value with a 400 error.
             if model.get("adaptive_thinking"):
                 request_params["thinking"] = {"type": "adaptive"}
-            elif "temperature" in model:
-                request_params["temperature"] = model["temperature"]
             if structured_output:
                 request_params["output_config"] = _anthropic_output_config(
                     reasoning_effort
