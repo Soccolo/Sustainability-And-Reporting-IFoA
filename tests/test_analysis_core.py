@@ -28,7 +28,9 @@ def message_for(
     input_tokens=100,
     output_tokens=20,
     *,
-    wrapped=False,
+    # Every selectable Claude model now uses structured output, so model
+    # responses arrive wrapped in an "items" object by default.
+    wrapped=True,
     stop_reason="end_turn",
 ):
     payload = {"items": items} if wrapped else items
@@ -413,7 +415,10 @@ class AnalysisCoreTests(unittest.TestCase):
         cost, savings = analysis_core.estimate_usage_cost(
             [
                 {
-                    "model": analysis_core.PRIMARY_MODEL,
+                    # Legacy Haiku 4.5 keeps flat rates, so the cache and
+                    # batch modifiers are checked without a long-context
+                    # premium.
+                    "model": analysis_core.LEGACY_HAIKU_MODEL,
                     "batch_priced": True,
                     "input_tokens": 1_000_000,
                     "output_tokens": 1_000_000,
@@ -430,7 +435,11 @@ class AnalysisCoreTests(unittest.TestCase):
         self.assertEqual(analysis_core.LUNA_MODEL, "gpt-6-luna")
         self.assertEqual(analysis_core.OPUS_MODEL, "claude-opus-5-5")
         self.assertEqual(analysis_core.SOL_MODEL, "gpt-6-sol")
-        self.assertEqual(analysis_core.HAIKU_55_MODEL, "claude-haiku-5-5")
+        self.assertEqual(analysis_core.HAIKU_MODEL, "claude-haiku-5-5")
+        self.assertEqual(analysis_core.HAIKU_55_MODEL, analysis_core.HAIKU_MODEL)
+        self.assertEqual(
+            analysis_core.LEGACY_HAIKU_MODEL, "claude-haiku-4-5-20251001"
+        )
         self.assertEqual(analysis_core.SONNET_MODEL, "claude-sonnet-5-5")
         self.assertEqual(
             analysis_core.get_model_config(analysis_core.SONNET_MODEL)["label"],
@@ -440,7 +449,6 @@ class AnalysisCoreTests(unittest.TestCase):
             analysis_core.USER_SELECTABLE_MODELS,
             (
                 analysis_core.HAIKU_MODEL,
-                analysis_core.HAIKU_55_MODEL,
                 analysis_core.LUNA_MODEL,
                 analysis_core.SOL_MODEL,
             ),
@@ -453,10 +461,10 @@ class AnalysisCoreTests(unittest.TestCase):
         )
         # provider, input, output, cache read, cache write, batch in/out
         expected = {
-            analysis_core.HAIKU_MODEL: (
+            analysis_core.LEGACY_HAIKU_MODEL: (
                 "anthropic", 1.0, 5.0, 0.1, 1.25, 0.5, 2.5
             ),
-            analysis_core.HAIKU_55_MODEL: (
+            analysis_core.HAIKU_MODEL: (
                 "anthropic", 0.1, 0.5, 0.01, 0.125, 0.05, 0.25
             ),
             analysis_core.LUNA_MODEL: (
@@ -781,6 +789,7 @@ class AnalysisCoreTests(unittest.TestCase):
             analysis_core.LEGACY_SOL_MODEL,
             analysis_core.LEGACY_OPUS_MODEL,
             analysis_core.LEGACY_SONNET_MODEL,
+            analysis_core.LEGACY_HAIKU_MODEL,
         ):
             config = analysis_core.get_model_config(model_id)
             self.assertTrue(config["legacy"])
@@ -1009,9 +1018,11 @@ class AnalysisCoreTests(unittest.TestCase):
                 for stream in anthropic_client.streams
             )
         )
-        self.assertNotIn("thinking", anthropic_client.calls[0])
-        # Haiku runs at temperature 0; Sonnet and Opus reject the setting.
-        self.assertEqual(anthropic_client.calls[0]["temperature"], 0.0)
+        self.assertEqual(
+            anthropic_client.calls[0]["thinking"], {"type": "adaptive"}
+        )
+        # Current Claude models reject a temperature, so none is sent.
+        self.assertNotIn("temperature", anthropic_client.calls[0])
         self.assertNotIn("temperature", anthropic_client.calls[1])
         self.assertNotIn("temperature", anthropic_client.calls[2])
         self.assertEqual(

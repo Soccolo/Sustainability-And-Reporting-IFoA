@@ -45,7 +45,7 @@ DRAFT_DIRECTIONS = {
 # harder task than the classification done in the Report Analyser.
 DRAFTER_MODELS = {
     "Claude Sonnet 5.5 — recommended for drafting quality": "claude-sonnet-5-5",
-    "Claude Haiku 4.5 — lowest cost": "claude-haiku-4-5",
+    "Claude Haiku 5.5 — lowest cost": "claude-haiku-5-5",
 }
 
 DOMAIN_NOTES = {
@@ -191,8 +191,8 @@ def claude_draft_report(page_texts, first_page_number, source_fw, target_fw,
         )
         if resp.stop_reason == "max_tokens":
             raise ValueError("Response truncated (max_tokens reached)")
-        # Sonnet 5.5 runs adaptive thinking by default, so the response may
-        # lead with thinking blocks — join the text blocks only.
+        # Sonnet 5.5 and Haiku 5.5 run adaptive thinking by default, so the
+        # response may lead with thinking blocks — join the text blocks only.
         raw = "".join(
             block.text for block in resp.content if block.type == "text"
         ).strip()

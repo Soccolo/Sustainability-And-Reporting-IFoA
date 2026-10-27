@@ -32,7 +32,7 @@ from startup_compat import import_module_with_exports
 _ANALYSIS_CORE_EXPORTS = (
     # Revision-specific marker: a cached older analysis module can have all the
     # ordinary exports below, so this unique name triggers a one-time reload.
-    "ANALYSIS_CORE_REVISION_20261007_SONNET_55",
+    "ANALYSIS_CORE_REVISION_20261027_HAIKU_55_ONLY",
     "ANALYST_MODELS",
     "AnalysisAuthenticationError",
     "CACHED_PROMPT_TOKEN_ENERGY_RATIO",
@@ -2115,17 +2115,17 @@ def main():
             ),
             (
                 "Pick the model, then paste the matching API key",
-                "In Single model mode you choose one of Claude Haiku 4.5, "
-                "Claude Haiku 5.5, GPT-6 Luna or GPT-6 Sol, and the app "
+                "In Single model mode you choose one of Claude Haiku 5.5, "
+                "GPT-6 Luna or GPT-6 Sol, and the app "
                 "shows that "
                 "model's price per million tokens. In cascade mode you "
                 "choose all three roles instead. The key box that appears "
                 "matches whichever provider you selected.",
-                "Haiku 4.5, Haiku 5.5 or GPT-6 Luna — the cheap tier and the "
+                "Haiku 5.5 or GPT-6 Luna — the cheap tier and the "
                 "right default. Haiku 5.5 and Luna are the cheapest, though "
                 "Haiku 5.5 charges 5× for a report longer than roughly "
                 "50,000 words. GPT-6 Sol is "
-                "OpenAI's flagship and runs in Fast mode, costing 4× Haiku 4.5 "
+                "OpenAI's flagship and runs in Fast mode, costing 40× Haiku 5.5 "
                 "per input token, so save it for a document you already "
                 "know is hard.",
             ),
@@ -2257,12 +2257,12 @@ def main():
                 "choose the reviewed cascade, three roles run in sequence:"
             )
             st.markdown(
-                "**1. Analyst** — Haiku 4.5, Haiku 5.5 or GPT-6 Luna reads "
+                "**1. Analyst** — Haiku 5.5 or GPT-6 Luna reads "
                 "your report "
                 "and gives every requirement a classification, evidence and "
                 "a confidence flag.\n\n"
                 "**2. Reviewer** — a *different* model (GPT-6 Luna, Haiku "
-                "4.5, Haiku 5.5, GPT-5.6 Terra or Sonnet 5.5) assesses every "
+                "5.5, GPT-5.6 Terra or Sonnet 5.5) assesses every "
                 "requirement "
                 "blind: it reads the report itself and never sees the "
                 "analyst's verdict, so agreement is a genuine second opinion. "
