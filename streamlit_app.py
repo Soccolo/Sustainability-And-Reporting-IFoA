@@ -3078,7 +3078,9 @@ def main():
             else:
                 use_batch_api = st.checkbox(
                     "Use Batch API — 50% cheaper, but slower",
-                    value=True,
+                    # Off by default: a batch can take hours, and the app
+                    # blocks on it for up to an hour, which reads as a hang.
+                    value=False,
                     key="analysis_single_use_batch",
                     help=(
                         "Uses Anthropic Message Batches or OpenAI Batch, "
