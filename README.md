@@ -130,7 +130,8 @@ inference, efficiency pathways, and test-time scaling", *Joule*
   batch discount.
 - **Page citations:** extracted evidence is requested in `[Page N] quote` format.
 
-Both vision and batch processing can be disabled in the Report Analyser UI.
+Vision is on by default and batch processing is off by default; both can be
+switched in the Report Analyser UI.
 Provider batches can take up to 24 hours; the current UI waits for up to one
 hour, retains the provider, model, batch ID, and analysis context in the
 Streamlit session, and offers a resume action without resubmitting. Closing or

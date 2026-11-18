@@ -2140,16 +2140,16 @@ def main():
             ),
             (
                 "Set the speed and cost options",
-                "**Batch API** is on by default in Single model mode: it is "
-                "50% cheaper but can take minutes to hours, and it isn't "
-                "available for the cascade. **Vision** is also on by "
-                "default and renders up to 30 dense or scanned pages as "
+                "**Batch API** is off by default in Single model mode: "
+                "ticking it is 50% cheaper but can take minutes to hours, "
+                "and it isn't available for the cascade. **Vision** is on "
+                "by default and renders up to 30 dense or scanned pages as "
                 "images, which improves coverage of charts at the cost of "
                 "more processing time.",
-                "Turn Batch **off** for your first run so you get an "
-                "interactive result in a couple of minutes rather than "
-                "waiting. Leave Vision on unless your report is plain text "
-                "and you want the run to finish faster.",
+                "Leave Batch **off** so you get an interactive result in a "
+                "couple of minutes; tick it only when cost matters more "
+                "than waiting. Leave Vision on unless your report is plain "
+                "text and you want the run to finish faster.",
             ),
             (
                 "Upload the PDF and set the page range",
@@ -3045,7 +3045,7 @@ def main():
             else:
                 st.info(
                     "**Processing time:** Batch API is the cheaper but slower "
-                    "option and may take minutes or substantially longer. Turn "
+                    "option and may take minutes or substantially longer. Leave "
                     "it off for the fastest interactive result. Vision also "
                     "adds processing time because page images must be rendered, "
                     "uploaded, and analysed."
@@ -3078,14 +3078,16 @@ def main():
             else:
                 use_batch_api = st.checkbox(
                     "Use Batch API — 50% cheaper, but slower",
-                    value=True,
+                    # Off by default: a batch can take hours, and the app
+                    # blocks on it for up to an hour, which reads as a hang.
+                    value=False,
                     key="analysis_single_use_batch",
                     help=(
                         "Uses Anthropic Message Batches or OpenAI Batch, "
                         "depending on the selected model. Batch is designed for "
                         "lower cost, not immediate results: it may take minutes "
-                        "and can take up to 24 hours. Turn it off for faster "
-                        "interactive testing."
+                        "and can take up to 24 hours. Leave it off for "
+                        "interactive use."
                     ),
                 )
             uploaded_file = st.file_uploader(
