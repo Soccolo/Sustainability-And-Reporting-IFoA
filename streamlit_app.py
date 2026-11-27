@@ -1,5 +1,5 @@
 """
-Sustainability Framework Analyser - Streamlit App
+CIRRA (Climate Intelligence for Reporting Readiness and Alignment) - Streamlit App
 Deploy to Streamlit Cloud for free public access.
 
 Supports Anthropic Claude and OpenAI GPT models for intelligent report
@@ -97,7 +97,7 @@ from analysis_core import (
 
 # Page config
 st.set_page_config(
-    page_title="Sustainability Framework Analyser",
+    page_title="CIRRA",
     page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1905,8 +1905,11 @@ def render_diff_html(text_a, text_b):
 
 
 def main():
-    st.title("Sustainability Framework Analyser")
-    st.markdown("Compare & analyse ESG reporting frameworks")
+    st.title("CIRRA")
+    st.markdown(
+        "**Climate Intelligence for Reporting Readiness and Alignment** · "
+        "Compare & analyse ESG reporting frameworks"
+    )
 
     # Load requirements + source references from Excel once
     framework_requirements, requirement_refs = load_framework_requirements()
