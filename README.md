@@ -1,7 +1,7 @@
 
-# Sustainability Framework Analyser
+# CIRRA
 
-A Streamlit application for assessing sustainability reports against multiple
+**Climate Intelligence for Reporting Readiness and Alignment.** A Streamlit application for assessing sustainability reports against multiple
 reporting frameworks with Anthropic Claude or OpenAI GPT models.
 
 ## Models and pricing
